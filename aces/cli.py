@@ -31,7 +31,9 @@ def cmd_run(args: argparse.Namespace) -> None:
     cfg.llm_backend = args.backend
     cfg.llm_model = args.model
     cfg.llm_api_key = args.api_key or ""
+    cfg.llm_base_url = args.base_url
     cfg.openclaw_base_url = args.openclaw_url
+    cfg.moltbook_url = args.moltbook_url or cfg.moltbook_url
     cfg.moltbook_api_key = args.moltbook_key
     cfg.moltbook_submolt = args.moltbook_submolt
 
@@ -56,7 +58,9 @@ def cmd_single(args: argparse.Namespace) -> None:
     cfg.llm_backend = args.backend
     cfg.llm_model = args.model
     cfg.llm_api_key = args.api_key or ""
+    cfg.llm_base_url = args.base_url
     cfg.openclaw_base_url = args.openclaw_url
+    cfg.moltbook_url = args.moltbook_url or cfg.moltbook_url
     cfg.moltbook_api_key = args.moltbook_key
     cfg.moltbook_submolt = args.moltbook_submolt
 
@@ -156,12 +160,16 @@ def main() -> None:
         p.add_argument("--output", "-o", default="results",
                         help="Output directory")
         p.add_argument("--backend", default="mock",
-                        choices=["mock", "openai", "anthropic", "openclaw"],
-                        help="Agent runtime backend")
+                        help="Agent runtime: mock, openclaw, anthropic, openai, "
+                             "openrouter, together, ollama, or any OpenAI-compatible name")
         p.add_argument("--model", default="", help="LLM model name")
         p.add_argument("--api-key", default="", help="LLM API key")
+        p.add_argument("--base-url", default="",
+                        help="LLM API base URL (auto-detected for known providers)")
         p.add_argument("--openclaw-url", default="http://localhost:18789",
                         help="OpenClaw gateway base URL")
+        p.add_argument("--moltbook-url", default="",
+                        help="Moltbook API URL (for self-hosted instances)")
         p.add_argument("--moltbook-key", default="", help="Moltbook API key")
         p.add_argument("--moltbook-submolt", default="enterprise",
                         help="Default Moltbook submolt")

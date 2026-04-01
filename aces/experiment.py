@@ -166,7 +166,8 @@ def run_single(cfg: ACESConfig, condition: Condition, seed: int,
     # Runtime.
     runtime = create_runtime(
         cfg.llm_backend, model=cfg.llm_model,
-        api_key=cfg.llm_api_key, seed=seed,
+        api_key=cfg.llm_api_key, base_url=cfg.llm_base_url,
+        seed=seed,
     )
 
     # Engine.
@@ -179,11 +180,12 @@ def run_single(cfg: ACESConfig, condition: Condition, seed: int,
 
     # Moltbook (ExtNet service).
     from .moltbook import MoltbookService
-    moltbook_mode = "live" if cfg.llm_backend == "openclaw" else "simulated"
+    moltbook_mode = "live" if cfg.moltbook_api_key else "simulated"
     mb = MoltbookService(
         db, engine.acl, mode=moltbook_mode,
-        api_key=getattr(cfg, "moltbook_api_key", ""),
-        default_submolt=getattr(cfg, "moltbook_submolt", "enterprise"),
+        api_key=cfg.moltbook_api_key,
+        base_url=cfg.moltbook_url,
+        default_submolt=cfg.moltbook_submolt,
     )
     engine.services.moltbook = mb
 

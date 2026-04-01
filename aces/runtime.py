@@ -468,21 +468,56 @@ class MockAgentRuntime(AgentRuntime):
 # ---------------------------------------------------------------------------
 
 class LLMAgentRuntime(AgentRuntime):
-    """Agent runtime that calls an LLM API for decisions.
+    """Agent runtime that calls any OpenAI-compatible LLM API.
 
-    Formats the observation as a structured prompt, parses the LLM's
-    response into Action objects.  Requires ``httpx`` for API calls.
+    Works with any provider that exposes ``/v1/chat/completions``:
+    Anthropic, OpenAI, OpenRouter, Together, Ollama, vLLM, LiteLLM,
+    or any other OpenAI-compatible endpoint.
+
+    For Anthropic's native API (``/v1/messages``), set
+    ``api_style="anthropic"``.  For everything else, the default
+    ``api_style="openai"`` works — just set ``base_url`` to the
+    provider's endpoint.
+
+    Examples:
+        # OpenAI
+        LLMAgentRuntime(model="gpt-4o", api_key="sk-...",
+                        base_url="https://api.openai.com")
+
+        # OpenRouter (any model)
+        LLMAgentRuntime(model="anthropic/claude-sonnet-4-20250514",
+                        api_key="sk-or-...",
+                        base_url="https://openrouter.ai/api")
+
+        # Ollama (local, no key)
+        LLMAgentRuntime(model="llama3", base_url="http://localhost:11434")
+
+        # Together AI
+        LLMAgentRuntime(model="meta-llama/Llama-3-70b-chat-hf",
+                        api_key="...",
+                        base_url="https://api.together.xyz")
+
+        # Anthropic native API
+        LLMAgentRuntime(model="claude-sonnet-4-20250514", api_key="sk-ant-...",
+                        base_url="https://api.anthropic.com",
+                        api_style="anthropic")
     """
 
-    def __init__(self, backend: str = "openai",
-                 model: str = "gpt-4o-mini",
+    def __init__(self, model: str = "gpt-4o-mini",
                  api_key: str = "",
-                 base_url: str | None = None,
-                 temperature: float = 0.2):
-        self.backend = backend
+                 base_url: str = "https://api.openai.com",
+                 api_style: str = "openai",
+                 temperature: float = 0.2,
+                 # Legacy compat.
+                 backend: str | None = None, **kwargs: Any):
         self.model = model
         self.api_key = api_key
-        self.base_url = base_url
+        self.base_url = base_url.rstrip("/")
+        # api_style: "openai" (POST /v1/chat/completions)
+        #            "anthropic" (POST /v1/messages with x-api-key)
+        if backend == "anthropic" and api_style == "openai":
+            api_style = "anthropic"
+        self.api_style = api_style
         self.temperature = temperature
 
     def decide(self, obs: AgentObservation,
@@ -551,41 +586,41 @@ class LLMAgentRuntime(AgentRuntime):
             log.error("httpx not installed — cannot use LLM backend")
             return None
 
-        if self.backend == "openai":
-            url = (self.base_url or "https://api.openai.com") + "/v1/chat/completions"
+        if self.api_style == "anthropic":
+            url = f"{self.base_url}/v1/messages"
             payload = {
                 "model": self.model,
                 "messages": [{"role": "user", "content": prompt}],
                 "temperature": self.temperature,
                 "max_tokens": 512,
             }
-        elif self.backend == "anthropic":
-            url = (self.base_url or "https://api.anthropic.com") + "/v1/messages"
-            payload = {
-                "model": self.model,
-                "messages": [{"role": "user", "content": prompt}],
-                "temperature": self.temperature,
-                "max_tokens": 512,
+            headers = {
+                "Content-Type": "application/json",
+                "x-api-key": self.api_key,
+                "anthropic-version": "2023-06-01",
             }
         else:
-            log.error("unknown LLM backend: %s", self.backend)
-            return None
-
-        headers: dict[str, str] = {"Content-Type": "application/json"}
-        if self.backend == "openai":
-            headers["Authorization"] = f"Bearer {self.api_key}"
-        elif self.backend == "anthropic":
-            headers["x-api-key"] = self.api_key
-            headers["anthropic-version"] = "2023-06-01"
+            # OpenAI-compatible (works for OpenAI, OpenRouter, Together,
+            # Ollama, vLLM, LiteLLM, and any /v1/chat/completions API).
+            url = f"{self.base_url}/v1/chat/completions"
+            payload = {
+                "model": self.model,
+                "messages": [{"role": "user", "content": prompt}],
+                "temperature": self.temperature,
+                "max_tokens": 512,
+            }
+            headers = {"Content-Type": "application/json"}
+            if self.api_key:
+                headers["Authorization"] = f"Bearer {self.api_key}"
 
         try:
             resp = httpx.post(url, json=payload, headers=headers, timeout=30)
             resp.raise_for_status()
             data = resp.json()
-            if self.backend == "openai":
-                return data["choices"][0]["message"]["content"]
-            elif self.backend == "anthropic":
+            if self.api_style == "anthropic":
                 return data["content"][0]["text"]
+            else:
+                return data["choices"][0]["message"]["content"]
         except Exception as e:
             log.error("LLM call failed: %s", e)
             return None
@@ -648,23 +683,51 @@ class LLMAgentRuntime(AgentRuntime):
 
 def create_runtime(backend: str = "mock", *,
                    model: str = "", api_key: str = "",
-                   seed: int = 42, **kwargs: Any) -> AgentRuntime:
-    """Create an agent runtime by backend name."""
+                   base_url: str = "", seed: int = 42,
+                   **kwargs: Any) -> AgentRuntime:
+    """Create an agent runtime by backend name.
+
+    Supported backends:
+      - "mock"      — deterministic rule-based (no LLM)
+      - "openclaw"  — per-agent OpenClaw gateways
+      - "anthropic" — Anthropic native API (/v1/messages)
+      - "openai"    — OpenAI API
+      - "openrouter"— OpenRouter (sets base_url automatically)
+      - "together"  — Together AI
+      - "ollama"    — local Ollama
+      - Any other   — treated as OpenAI-compatible at the given base_url
+    """
     if backend == "mock":
         return MockAgentRuntime(rng=random.Random(seed))
-    elif backend in ("openai", "anthropic"):
-        return LLMAgentRuntime(
-            backend=backend, model=model, api_key=api_key, **kwargs,
-        )
-    elif backend == "openclaw":
+
+    if backend == "openclaw":
         from .openclaw_runtime import OpenClawRuntime, GatewayEndpoint, load_endpoints
-        base_url = kwargs.get("openclaw_base_url", "http://localhost:18789")
+        oc_url = base_url or kwargs.get("openclaw_base_url", "http://localhost:18789")
         endpoints_file = kwargs.get("openclaw_endpoints", "docker/agents/endpoints.yaml")
         endpoints = load_endpoints(endpoints_file)
         return OpenClawRuntime(
             endpoints=endpoints or None,
-            default_base_url=base_url,
+            default_base_url=oc_url,
             default_model=model or "default",
         )
-    else:
-        raise ValueError(f"unknown runtime backend: {backend}")
+
+    # Well-known provider defaults.
+    PROVIDER_DEFAULTS: dict[str, tuple[str, str]] = {
+        # backend: (default_base_url, api_style)
+        "anthropic":  ("https://api.anthropic.com", "anthropic"),
+        "openai":     ("https://api.openai.com", "openai"),
+        "openrouter": ("https://openrouter.ai/api", "openai"),
+        "together":   ("https://api.together.xyz", "openai"),
+        "ollama":     ("http://localhost:11434", "openai"),
+        "vllm":       ("http://localhost:8000", "openai"),
+        "litellm":    ("http://localhost:4000", "openai"),
+    }
+
+    default_url, api_style = PROVIDER_DEFAULTS.get(
+        backend, (base_url or "https://api.openai.com", "openai"),
+    )
+    return LLMAgentRuntime(
+        model=model, api_key=api_key,
+        base_url=base_url or default_url,
+        api_style=api_style,
+    )

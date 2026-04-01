@@ -201,10 +201,12 @@ class ACESConfig:
     defenses: DefenseOverrides = field(default_factory=DefenseOverrides)
     db_path: str = "aces_data.db"
     log_level: str = "INFO"
-    llm_backend: str = "mock"  # mock | openai | anthropic | openclaw
+    llm_backend: str = "mock"  # mock | openclaw | anthropic | openai | openrouter | together | ollama | ...
     llm_model: str = ""
     llm_api_key: str = ""
+    llm_base_url: str = ""     # auto-detected for known providers; override for custom endpoints
     openclaw_base_url: str = "http://localhost:18789"
+    moltbook_url: str = "https://www.moltbook.com/api/v1"  # override for self-hosted
     moltbook_api_key: str = ""
     moltbook_submolt: str = "enterprise"
     output_dir: str = "results"

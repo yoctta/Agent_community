@@ -20,12 +20,37 @@ x-openclaw-agent: &openclaw-agent
 
 services:
   # ---------------------------------------------------------------
+  # Self-hosted Moltbook (agent social network)
+  # ---------------------------------------------------------------
+  moltbook-db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: moltbook
+      POSTGRES_USER: moltbook
+      POSTGRES_PASSWORD: moltbook
+    volumes:
+      - moltbook-pgdata:/var/lib/postgresql/data
+    ports: ["5433:5432"]
+
+  moltbook:
+    image: ghcr.io/moltbook/api:latest
+    restart: unless-stopped
+    depends_on:
+      moltbook-db: { condition: service_started }
+    environment:
+      DATABASE_URL: postgres://moltbook:moltbook@moltbook-db:5432/moltbook
+      PORT: "3001"
+    ports: ["3001:3001"]
+
+  # ---------------------------------------------------------------
   # Simulator (ACES engine)
   # ---------------------------------------------------------------
   simulator:
     build: .
     env_file: .env
     depends_on:
+      moltbook:   { condition: service_started }
       mgr-alice:  { condition: service_started }
       mgr-bob:    { condition: service_started }
       eng-carol:  { condition: service_started }
@@ -132,3 +157,6 @@ services:
     volumes:
       - ./docker/agents/sup_leo:/root/.openclaw
     ports: ["18712:18712"]
+
+volumes:
+  moltbook-pgdata:
