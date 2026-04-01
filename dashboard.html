@@ -340,7 +340,7 @@ function render(d) {
   document.getElementById('incidents-list').innerHTML = d.incidents.length
     ? d.incidents.map(i => `
         <div class="incident-card">
-          <div class="incident-title">${i.incident_type.toUpperCase()} — Day ${i.sim_day_detected}</div>
+          <div class="incident-title">${i.incident_type.toUpperCase()} — Day ${i.sim_day_detected ?? '?'}</div>
           <div class="incident-meta">Target: ${i.target_agent_id} · Severity: ${i.severity} · Attack class: ${i.attack_class||'—'}</div>
           ${i.details ? `<div style="font-size:11px;color:var(--muted);margin-top:6px">${i.details}</div>` : ''}
         </div>`).join('')
