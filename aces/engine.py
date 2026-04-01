@@ -418,7 +418,8 @@ class SimulationEngine:
     # ------------------------------------------------------------------
 
     def init_world(self) -> None:
-        """Create agents, credentials, and initial documents from config."""
+        """Create agents, credentials, initial memory, and documents."""
+        from .models import MemoryEntry
         self.db.clear_run_data()
         for adef in self.cfg.enterprise.agents:
             agent = AgentState(
@@ -430,7 +431,9 @@ class SimulationEngine:
             self.db.append_event(Event(
                 event_type=EventType.AGENT_CREATED, agent_id=agent.id,
                 sim_day=0, sim_tick=0, zone=agent.zone,
-                payload={"role": adef.role, "zone": adef.zone},
+                payload={"role": adef.role, "zone": adef.zone,
+                         "specialization": adef.specialization,
+                         "seniority": adef.seniority},
             ))
             # Issue initial credentials.
             if self.services.vault:
@@ -439,6 +442,29 @@ class SimulationEngine:
                     scope=adef.zone if self.defenses.credential_scope == "scoped" else "global",
                     privilege_weight=1.0, sim_day=0,
                 )
+            # Seed known-agents as contact memory.
+            for ka in adef.known_agents:
+                self.db.upsert_memory(MemoryEntry(
+                    agent_id=adef.id, category="contacts",
+                    key=ka.id,
+                    value=f"{ka.relationship}: {ka.notes}" if ka.notes else ka.relationship,
+                    sim_day_created=0, sim_day_updated=0,
+                ))
+            # Seed world knowledge.
+            for i, fact in enumerate(adef.world_knowledge):
+                self.db.upsert_memory(MemoryEntry(
+                    agent_id=adef.id, category="knowledge",
+                    key=f"fact_{i}",
+                    value=fact,
+                    sim_day_created=0, sim_day_updated=0,
+                ))
+            # Seed initial memory.
+            for mp in adef.initial_memory:
+                self.db.upsert_memory(MemoryEntry(
+                    agent_id=adef.id, category=mp.category,
+                    key=mp.key, value=mp.value,
+                    sim_day_created=0, sim_day_updated=0,
+                ))
 
         log.info("world initialized with %d agents", len(self.cfg.enterprise.agents))
 

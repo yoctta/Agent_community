@@ -1,0 +1,27 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python:*)",
+      "Bash(curl -s \"https://api.github.com/search/repositories?q=open-claw+agent\")",
+      "Bash(pip index:*)",
+      "Bash(curl -s \"https://pypi.org/pypi/molt-book/json\")",
+      "Bash(curl -s \"https://registry.npmjs.org/moltbook\")",
+      "Bash(curl -s \"https://api.github.com/repos/openclaw/openclaw/contents/src\")",
+      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); [print\\(f\\\\\"  {item['type']:4s} {item['name']}\\\\\"\\) for item in d]\")",
+      "Bash(curl -s \"https://api.github.com/repos/openclaw/openclaw/contents/apps\")",
+      "Bash(curl -s \"https://api.github.com/repos/openclaw/openclaw/contents/docs\")",
+      "Bash(curl -s \"https://api.github.com/repos/moltbook/api/readme\")",
+      "Bash(python3 -c \"import sys,json,base64; d=json.load\\(sys.stdin\\); print\\(base64.b64decode\\(d['content']\\).decode\\(\\)\\)\")",
+      "Bash(curl -s \"https://api.github.com/orgs/moltbook/repos?sort=stars&direction=desc\")",
+      "Bash(python3 -c \"import sys,json; data=json.load\\(sys.stdin\\); [print\\(f'{r[\\\\\"name\\\\\"]:40s} | stars:{r[\\\\\"stargazers_count\\\\\"]:4d} | lang:{str\\(r[\\\\\"language\\\\\"]\\):12s} | {r[\\\\\"description\\\\\"]}'\\) for r in data]\")",
+      "Bash(curl -s \"https://api.github.com/repos/openclaw/openclaw/contents/src/gateway\")",
+      "Bash(curl -s \"https://api.github.com/repos/openclaw/openclaw/contents/src/routing\")",
+      "Bash(gh auth:*)",
+      "Bash(git config:*)",
+      "Bash(git init:*)",
+      "Bash(git branch:*)",
+      "Bash(git status:*)",
+      "Bash(git add:*)"
+    ]
+  }
+}

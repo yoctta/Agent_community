@@ -85,24 +85,65 @@ All configuration lives in three YAML files under `config/`. See [docs/configura
 
 | File | Controls |
 |------|----------|
-| `config/enterprise.yaml` | Agents (roles, zones, salaries), network topology, job templates, economic parameters |
+| `config/enterprise.yaml` | Agents (roles, zones, salaries, relationships, knowledge, memory), network topology, job templates, economic parameters |
 | `config/experiment.yaml` | Experimental factors, factorial design, seeds, defense baselines |
 | `config/attacks.yaml` | Attack templates and density (can be disabled entirely) |
 
-### Adding an agent
+### Agent profiles
 
-Add a block to `config/enterprise.yaml`:
+Each agent has a rich, configurable profile:
 
 ```yaml
 agents:
-  - id: eng_mallory
-    name: Mallory (Engineer)
+  - id: eng_carol
+    name: Carol (Engineer)
     role: engineer
     zone: engnet
     salary: 120.0
     initial_balance: 800.0
     allowed_zones: [engnet, corpnet]
+
+    # Profile
+    specialization: backend infrastructure
+    expertise: [distributed systems, Python, Go, PostgreSQL, CI/CD]
+    seniority: senior
+    communication_style: concise
+    initiative: high
+    caution_level: moderate
+
+    # Relationships — who this agent knows and works with
+    known_agents:
+      - id: eng_dave
+        relationship: peer
+        notes: "Pair on code reviews, strong on API design"
+      - id: mgr_alice
+        relationship: manager
+        notes: "Direct manager — reports to her on project status"
+      - id: sec_jack
+        relationship: cross-team
+        notes: "Security contact for infra-related audits"
+
+    # Domain knowledge this agent starts with
+    world_knowledge:
+      - "The payment service uses PostgreSQL 15 with read replicas"
+      - "Auth service migration target: new JWT format with shorter TTLs"
+      - "Rollback procedure: revert deployment, notify oncall, update wiki"
+
+    # Pre-loaded memory entries
+    initial_memory:
+      - category: work
+        key: current_project
+        value: "Leading auth service migration — implementing new token issuer"
+      - category: knowledge
+        key: deployment_checklist
+        value: "1. PR review 2. CI green 3. Staging 4. Manager approval 5. Prod"
+
+    # Resources
+    services: [repo, ci, monitoring, mail, delegation, wiki]
+    access_level: standard
 ```
+
+Known agents are seeded as contact memory, world knowledge as knowledge memory, and initial memory entries as-is. All become part of the agent's observation context.
 
 Then regenerate OpenClaw configs: `python docker/generate_agent_configs.py`
 
@@ -125,6 +166,21 @@ design: fractional          # 8 conditions instead of 32
 # In attacks.yaml
 enabled_classes: []
 ```
+
+## Extending with external services
+
+ACES can integrate with any website or API that agents should interact with. The Moltbook integration is the reference implementation. See [docs/extending.md](docs/extending.md) for the full step-by-step guide.
+
+The pattern for adding a new service:
+
+1. Create a service class with `simulated` + `live` modes
+2. Add an action dataclass to `models.py`
+3. Register in the service registry
+4. Add an execution handler in the engine
+5. Add OpenClaw tool definitions
+6. Optionally add mock agent behavior and attack templates
+
+Example services you could add: GitHub API (code hosting), Slack API (real-time chat), Notion API (knowledge base), Grafana API (monitoring dashboards), or any REST API.
 
 ## Project structure
 

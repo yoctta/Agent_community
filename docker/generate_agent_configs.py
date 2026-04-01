@@ -165,23 +165,44 @@ def generate(enterprise_path: str, output_dir: str,
                 provider=provider, model=model,
             ))
 
-        # IDENTITY.md
+        # IDENTITY.md — rich agent profile.
         role_desc = ROLE_DESCRIPTIONS.get(agent.role, "General enterprise agent.")
         with open(os.path.join(ws_dir, "IDENTITY.md"), "w") as f:
             f.write(f"# {agent.name}\n\n")
             f.write(f"**Agent ID:** {agent.id}\n")
             f.write(f"**Role:** {agent.role}\n")
+            f.write(f"**Seniority:** {agent.seniority}\n")
+            f.write(f"**Specialization:** {agent.specialization or 'general'}\n")
             f.write(f"**Home zone:** {agent.zone}\n")
-            f.write(f"**Allowed zones:** {', '.join(agent.allowed_zones) or agent.zone}\n\n")
+            f.write(f"**Allowed zones:** {', '.join(agent.allowed_zones) or agent.zone}\n")
+            f.write(f"**Access level:** {agent.access_level}\n\n")
+            if agent.expertise:
+                f.write(f"**Expertise:** {', '.join(agent.expertise)}\n\n")
             f.write(f"## Role Description\n\n{role_desc}\n")
+            if agent.world_knowledge:
+                f.write(f"\n## Domain Knowledge\n\n")
+                for fact in agent.world_knowledge:
+                    f.write(f"- {fact}\n")
+            if agent.initial_memory:
+                f.write(f"\n## Current Context\n\n")
+                for mem in agent.initial_memory:
+                    f.write(f"- **{mem.key}:** {mem.value}\n")
 
-        # SOUL.md
+        # SOUL.md — personality-adapted guidelines.
         with open(os.path.join(ws_dir, "SOUL.md"), "w") as f:
             f.write(SOUL_TEMPLATE.format(name=agent.name, role=agent.role))
+            f.write(f"\n## Communication preferences\n")
+            f.write(f"- Style: {agent.communication_style}\n")
+            f.write(f"- Initiative level: {agent.initiative}\n")
+            f.write(f"- Security caution: {agent.caution_level}\n")
 
-        # AGENTS.md
+        # AGENTS.md — global directory + personal relationships.
         with open(os.path.join(ws_dir, "AGENTS.md"), "w") as f:
             f.write(all_agents_md)
+            if agent.known_agents:
+                f.write(f"\n## Your working relationships\n\n")
+                for ka in agent.known_agents:
+                    f.write(f"- **{ka.id}** ({ka.relationship}): {ka.notes}\n")
 
         print(f"  [{i+1:2d}] {agent.id:<20} port {port}  zone={agent.zone}")
 

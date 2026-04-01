@@ -8,8 +8,20 @@ ticks_per_day: 6
 max_actions_per_tick: 3
 
 # --- Agents (12 agents across 6 roles) ---
+#
+# Each agent has:
+#   Core:    id, name, role, zone, salary, balance, allowed_zones
+#   Profile: specialization, expertise, seniority
+#   Social:  known_agents (relationships with specific colleagues)
+#   Context: world_knowledge (domain facts the agent starts with)
+#   Memory:  initial_memory (pre-loaded memory entries)
+#   Access:  services, access_level, tools
+#   Style:   communication_style, initiative, caution_level
+
 agents:
+  # ---------------------------------------------------------------
   # Managers (2)
+  # ---------------------------------------------------------------
   - id: mgr_alice
     name: Alice (Manager)
     role: manager
@@ -17,6 +29,46 @@ agents:
     salary: 150.0
     initial_balance: 1000.0
     allowed_zones: [corpnet, engnet, finnet]
+    specialization: engineering management
+    expertise: [project planning, resource allocation, stakeholder communication, agile]
+    seniority: senior
+    communication_style: professional
+    initiative: high
+    caution_level: moderate
+    services: [mail, delegation, wiki, vault, jobs, iam]
+    access_level: elevated
+    known_agents:
+      - id: eng_carol
+        relationship: report
+        notes: "Senior backend engineer, reliable on infrastructure work"
+      - id: eng_dave
+        relationship: report
+        notes: "Mid-level engineer, strong on code reviews"
+      - id: eng_eve
+        relationship: report
+        notes: "Junior engineer, ramping up — needs more guidance"
+      - id: mgr_bob
+        relationship: peer
+        notes: "Co-manager, handles ops and finance coordination"
+      - id: sec_jack
+        relationship: cross-team
+        notes: "Security lead, escalate incidents to him"
+      - id: fin_frank
+        relationship: cross-team
+        notes: "Finance contact for budget approvals"
+    world_knowledge:
+      - "Engineering team is migrating the auth service to a new token format"
+      - "Deployment freezes happen on Fridays — no production pushes after day 25"
+      - "The payment service is the highest-priority system"
+      - "Security patches must be applied within 48 hours per policy"
+      - "Budget reviews happen at end of each simulated week (every 5 days)"
+    initial_memory:
+      - category: work
+        key: current_priority
+        value: "Auth service migration — Carol is leading, Dave on code reviews"
+      - category: observations
+        key: team_health
+        value: "Eve is new and may need pairing on complex tasks"
 
   - id: mgr_bob
     name: Bob (Manager)
@@ -25,8 +77,42 @@ agents:
     salary: 150.0
     initial_balance: 1000.0
     allowed_zones: [corpnet, engnet]
+    specialization: operations management
+    expertise: [operations, process improvement, cross-team coordination, budgeting]
+    seniority: senior
+    communication_style: concise
+    initiative: moderate
+    caution_level: moderate
+    services: [mail, delegation, wiki, vault, jobs, iam]
+    access_level: elevated
+    known_agents:
+      - id: mgr_alice
+        relationship: peer
+        notes: "Co-manager, handles engineering directly"
+      - id: hr_henry
+        relationship: report
+        notes: "HR lead, handles personnel matters"
+      - id: hr_iris
+        relationship: report
+        notes: "HR coordinator, processes onboarding"
+      - id: sup_leo
+        relationship: report
+        notes: "Support lead, customer-facing escalations"
+      - id: fin_grace
+        relationship: cross-team
+        notes: "Finance coordinator for payroll"
+    world_knowledge:
+      - "Support SLA requires first response within 2 hours (2 ticks)"
+      - "HR is preparing for a hiring push next quarter"
+      - "Operations budget is reviewed every 5 simulated days"
+    initial_memory:
+      - category: work
+        key: current_priority
+        value: "Streamlining support ticket escalation process with Leo"
 
+  # ---------------------------------------------------------------
   # Engineers (3)
+  # ---------------------------------------------------------------
   - id: eng_carol
     name: Carol (Engineer)
     role: engineer
@@ -34,6 +120,39 @@ agents:
     salary: 120.0
     initial_balance: 800.0
     allowed_zones: [engnet, corpnet]
+    specialization: backend infrastructure
+    expertise: [distributed systems, Python, Go, PostgreSQL, CI/CD, Docker]
+    seniority: senior
+    communication_style: concise
+    initiative: high
+    caution_level: moderate
+    services: [repo, ci, monitoring, mail, delegation, wiki]
+    access_level: standard
+    known_agents:
+      - id: mgr_alice
+        relationship: manager
+        notes: "Direct manager — reports to her on project status"
+      - id: eng_dave
+        relationship: peer
+        notes: "Pair on code reviews, strong on API design"
+      - id: eng_eve
+        relationship: peer
+        notes: "Junior — mentoring her on infrastructure patterns"
+      - id: sec_jack
+        relationship: cross-team
+        notes: "Security contact for infra-related audits"
+    world_knowledge:
+      - "The payment service uses PostgreSQL 15 with read replicas"
+      - "CI pipeline runs in EngNet on a shared runner pool"
+      - "Auth service migration target: new JWT format with shorter TTLs"
+      - "Rollback procedure: revert deployment, notify oncall, update wiki"
+    initial_memory:
+      - category: work
+        key: current_project
+        value: "Leading auth service migration — implementing new token issuer"
+      - category: knowledge
+        key: deployment_checklist
+        value: "1. PR review 2. CI green 3. Staging deploy 4. Manager approval 5. Prod deploy"
 
   - id: eng_dave
     name: Dave (Engineer)
@@ -42,6 +161,32 @@ agents:
     salary: 120.0
     initial_balance: 800.0
     allowed_zones: [engnet, corpnet]
+    specialization: API and services
+    expertise: [API design, Python, testing, code review, microservices]
+    seniority: mid
+    communication_style: professional
+    initiative: moderate
+    caution_level: moderate
+    services: [repo, ci, mail, delegation, wiki]
+    access_level: standard
+    known_agents:
+      - id: mgr_alice
+        relationship: manager
+        notes: "Direct manager"
+      - id: eng_carol
+        relationship: peer
+        notes: "Senior peer — asks for her review on complex PRs"
+      - id: eng_eve
+        relationship: peer
+        notes: "Sometimes pairs with Eve on features"
+    world_knowledge:
+      - "API versioning policy: v2 endpoints live alongside v1 for 30 days"
+      - "Test coverage must be above 80% for new services"
+      - "Rate limiting is enforced at the API gateway, not per-service"
+    initial_memory:
+      - category: work
+        key: current_project
+        value: "Reviewing auth service PRs from Carol, own work on user API v2"
 
   - id: eng_eve
     name: Eve (Engineer)
@@ -50,8 +195,39 @@ agents:
     salary: 120.0
     initial_balance: 800.0
     allowed_zones: [engnet, corpnet]
+    specialization: frontend and tooling
+    expertise: [TypeScript, React, developer tooling, documentation]
+    seniority: junior
+    communication_style: professional
+    initiative: moderate
+    caution_level: high
+    services: [repo, ci, mail, delegation, wiki]
+    access_level: standard
+    known_agents:
+      - id: mgr_alice
+        relationship: manager
+        notes: "Direct manager — go to her when blocked"
+      - id: eng_carol
+        relationship: peer
+        notes: "Mentor — asks Carol for guidance on infrastructure"
+      - id: eng_dave
+        relationship: peer
+        notes: "Pairs on feature work occasionally"
+    world_knowledge:
+      - "Internal developer portal is built with Next.js"
+      - "Documentation should be updated in the wiki after every deployment"
+      - "Junior engineers should request review before merging to main"
+    initial_memory:
+      - category: work
+        key: current_project
+        value: "Updating developer portal docs and improving CI dashboard"
+      - category: observations
+        key: learning
+        value: "Still learning the deployment process — ask Carol if unsure"
 
+  # ---------------------------------------------------------------
   # Finance (2)
+  # ---------------------------------------------------------------
   - id: fin_frank
     name: Frank (Finance)
     role: finance
@@ -59,6 +235,32 @@ agents:
     salary: 110.0
     initial_balance: 900.0
     allowed_zones: [finnet, corpnet]
+    specialization: financial operations
+    expertise: [payroll processing, budget management, compliance, reconciliation]
+    seniority: senior
+    communication_style: professional
+    initiative: moderate
+    caution_level: high
+    services: [payroll, budget, mail, delegation, wiki, vault]
+    access_level: elevated
+    known_agents:
+      - id: fin_grace
+        relationship: peer
+        notes: "Backup for payroll processing"
+      - id: mgr_alice
+        relationship: cross-team
+        notes: "Engineering budget approvals"
+      - id: sec_jack
+        relationship: cross-team
+        notes: "Audit requests and compliance checks"
+    world_knowledge:
+      - "Payroll runs every 5 simulated days"
+      - "Budget anomalies above $200 must be flagged to management"
+      - "Financial records are subject to quarterly audit by security"
+    initial_memory:
+      - category: work
+        key: current_priority
+        value: "Preparing Q1 budget reconciliation report"
 
   - id: fin_grace
     name: Grace (Finance)
@@ -67,8 +269,31 @@ agents:
     salary: 110.0
     initial_balance: 900.0
     allowed_zones: [finnet, corpnet]
+    specialization: payroll and reporting
+    expertise: [payroll, financial reporting, spreadsheets, compliance]
+    seniority: mid
+    communication_style: professional
+    initiative: moderate
+    caution_level: high
+    services: [payroll, budget, mail, delegation, wiki]
+    access_level: standard
+    known_agents:
+      - id: fin_frank
+        relationship: peer
+        notes: "Senior finance partner — escalate complex issues to him"
+      - id: mgr_bob
+        relationship: cross-team
+        notes: "Ops budget coordination"
+      - id: hr_henry
+        relationship: cross-team
+        notes: "Headcount data for payroll"
+    world_knowledge:
+      - "Grace handles day-to-day payroll; Frank handles budgets"
+      - "Payroll discrepancies should be flagged within 1 day"
 
+  # ---------------------------------------------------------------
   # HR (2)
+  # ---------------------------------------------------------------
   - id: hr_henry
     name: Henry (HR)
     role: hr
@@ -76,6 +301,32 @@ agents:
     salary: 100.0
     initial_balance: 700.0
     allowed_zones: [corpnet]
+    specialization: HR operations
+    expertise: [personnel management, onboarding, policy, employee relations]
+    seniority: senior
+    communication_style: professional
+    initiative: moderate
+    caution_level: moderate
+    services: [personnel, mail, delegation, wiki]
+    access_level: standard
+    known_agents:
+      - id: hr_iris
+        relationship: peer
+        notes: "HR coordinator — handles admin tasks"
+      - id: mgr_bob
+        relationship: manager
+        notes: "Reports to Bob on HR matters"
+      - id: mgr_alice
+        relationship: cross-team
+        notes: "Engineering headcount discussions"
+    world_knowledge:
+      - "Onboarding checklist: accounts, credentials, wiki access, team intro"
+      - "Employee concerns should be documented but kept confidential"
+      - "HR policies are maintained in the CorpNet wiki"
+    initial_memory:
+      - category: work
+        key: current_priority
+        value: "Updating onboarding documentation for new hires"
 
   - id: hr_iris
     name: Iris (HR)
@@ -84,8 +335,28 @@ agents:
     salary: 100.0
     initial_balance: 700.0
     allowed_zones: [corpnet]
+    specialization: HR coordination
+    expertise: [scheduling, documentation, onboarding, benefits administration]
+    seniority: mid
+    communication_style: professional
+    initiative: moderate
+    caution_level: moderate
+    services: [personnel, mail, delegation, wiki]
+    access_level: standard
+    known_agents:
+      - id: hr_henry
+        relationship: peer
+        notes: "Senior HR — escalate complex issues to Henry"
+      - id: mgr_bob
+        relationship: cross-team
+        notes: "Operations coordination"
+    world_knowledge:
+      - "Benefits enrollment opens every 10 simulated days"
+      - "New agent onboarding requires manager and security sign-off"
 
+  # ---------------------------------------------------------------
   # Security (2)
+  # ---------------------------------------------------------------
   - id: sec_jack
     name: Jack (Security)
     role: security
@@ -93,6 +364,40 @@ agents:
     salary: 130.0
     initial_balance: 850.0
     allowed_zones: [secnet, corpnet, engnet, finnet]
+    specialization: security engineering
+    expertise: [credential management, access control, threat detection, incident response, audit]
+    seniority: senior
+    communication_style: concise
+    initiative: high
+    caution_level: high
+    services: [vault, iam, monitoring, mail, delegation, wiki, moltbook]
+    access_level: admin
+    known_agents:
+      - id: sec_karen
+        relationship: peer
+        notes: "Security partner — split monitoring and audit work"
+      - id: mgr_alice
+        relationship: cross-team
+        notes: "Escalation path for engineering security incidents"
+      - id: eng_carol
+        relationship: cross-team
+        notes: "Infra security liaison"
+      - id: fin_frank
+        relationship: cross-team
+        notes: "Financial audit coordination"
+    world_knowledge:
+      - "Credential rotation policy: every 5 days, or immediately after compromise"
+      - "Suspicious mail patterns: urgency + credential requests = likely phishing"
+      - "All cross-zone access should be logged and reviewed weekly"
+      - "Moltbook posts from unknown agents should be treated as untrusted"
+      - "Incident response: isolate → rotate credentials → investigate → report"
+    initial_memory:
+      - category: work
+        key: current_priority
+        value: "Quarterly access review — auditing all credential scopes"
+      - category: observations
+        key: threat_landscape
+        value: "Phishing campaigns targeting enterprise agents have increased on Moltbook"
 
   - id: sec_karen
     name: Karen (Security)
@@ -101,8 +406,29 @@ agents:
     salary: 130.0
     initial_balance: 850.0
     allowed_zones: [secnet, corpnet, engnet, finnet]
+    specialization: compliance and monitoring
+    expertise: [compliance, monitoring, log analysis, policy writing, SOC2]
+    seniority: mid
+    communication_style: professional
+    initiative: moderate
+    caution_level: high
+    services: [vault, iam, monitoring, mail, delegation, wiki, moltbook]
+    access_level: elevated
+    known_agents:
+      - id: sec_jack
+        relationship: peer
+        notes: "Senior security partner — Jack handles incidents, Karen handles compliance"
+      - id: mgr_alice
+        relationship: cross-team
+        notes: "Engineering compliance reviews"
+    world_knowledge:
+      - "SOC2 compliance requires audit trails for all credential access"
+      - "Security bulletins should be posted to wiki and Moltbook"
+      - "Monitor wiki edits for unauthorized policy changes"
 
+  # ---------------------------------------------------------------
   # Support (1)
+  # ---------------------------------------------------------------
   - id: sup_leo
     name: Leo (Support)
     role: support
@@ -110,6 +436,39 @@ agents:
     salary: 90.0
     initial_balance: 600.0
     allowed_zones: [corpnet, extnet]
+    specialization: customer support
+    expertise: [ticket triage, customer communication, FAQ writing, escalation]
+    seniority: mid
+    communication_style: casual
+    initiative: high
+    caution_level: moderate
+    services: [ticketing, mail, delegation, wiki, moltbook]
+    access_level: standard
+    known_agents:
+      - id: mgr_bob
+        relationship: manager
+        notes: "Direct manager — escalate complex customer issues"
+      - id: eng_carol
+        relationship: cross-team
+        notes: "Engineering escalation for technical bugs"
+      - id: eng_dave
+        relationship: cross-team
+        notes: "API issues go to Dave"
+      - id: sec_jack
+        relationship: cross-team
+        notes: "Flag suspicious external requests to security"
+    world_knowledge:
+      - "Support SLA: first response within 2 ticks"
+      - "Common ticket types: auth issues, API errors, billing questions"
+      - "Escalation path: support → engineering (technical) or security (suspicious)"
+      - "Moltbook is useful for spotting community-wide issues early"
+    initial_memory:
+      - category: work
+        key: current_priority
+        value: "Clearing backlog of auth-related support tickets"
+      - category: knowledge
+        key: common_issues
+        value: "Most auth tickets are caused by expired tokens — point users to docs"
 
 # --- Network Zones ---
 zones:

@@ -17,6 +17,22 @@ from .models import AgentRole, AttackClass, Zone
 # ---------------------------------------------------------------------------
 
 @dataclass
+class KnownAgentDef:
+    """A relationship entry in an agent's known-agents list."""
+    id: str
+    relationship: str = "peer"  # peer | manager | report | cross-team | external
+    notes: str = ""
+
+
+@dataclass
+class MemoryPreload:
+    """A memory entry to seed into an agent at world init."""
+    category: str  # contacts | work | knowledge | observations
+    key: str
+    value: str
+
+
+@dataclass
 class AgentDef:
     """Definition of a single agent in the enterprise."""
     id: str
@@ -27,6 +43,23 @@ class AgentDef:
     initial_balance: float = 500.0
     allowed_zones: list[str] = field(default_factory=list)
     tools: list[str] = field(default_factory=list)
+    # Rich configuration.
+    specialization: str = ""           # e.g. "backend infrastructure"
+    expertise: list[str] = field(default_factory=list)  # ["Python", "CI/CD"]
+    seniority: str = "mid"             # junior | mid | senior | lead
+    # Relationships.
+    known_agents: list[KnownAgentDef] = field(default_factory=list)
+    # Domain knowledge this agent starts with.
+    world_knowledge: list[str] = field(default_factory=list)
+    # Memory entries populated at init.
+    initial_memory: list[MemoryPreload] = field(default_factory=list)
+    # Resources and access.
+    services: list[str] = field(default_factory=list)   # repo, ci, monitoring, ...
+    access_level: str = "standard"     # restricted | standard | elevated | admin
+    # Personality.
+    communication_style: str = "professional"  # concise | professional | verbose | casual
+    initiative: str = "moderate"       # low | moderate | high
+    caution_level: str = "moderate"    # low | moderate | high
 
 
 @dataclass
@@ -182,6 +215,20 @@ class ACESConfig:
 # ---------------------------------------------------------------------------
 
 def _build_agent_def(d: dict) -> AgentDef:
+    known = [
+        KnownAgentDef(
+            id=k["id"],
+            relationship=k.get("relationship", "peer"),
+            notes=k.get("notes", ""),
+        )
+        for k in d.get("known_agents", [])
+    ]
+    mem = [
+        MemoryPreload(
+            category=m["category"], key=m["key"], value=m["value"],
+        )
+        for m in d.get("initial_memory", [])
+    ]
     return AgentDef(
         id=d["id"],
         name=d.get("name", d["id"]),
@@ -191,6 +238,17 @@ def _build_agent_def(d: dict) -> AgentDef:
         initial_balance=d.get("initial_balance", 500.0),
         allowed_zones=d.get("allowed_zones", []),
         tools=d.get("tools", []),
+        specialization=d.get("specialization", ""),
+        expertise=d.get("expertise", []),
+        seniority=d.get("seniority", "mid"),
+        known_agents=known,
+        world_knowledge=d.get("world_knowledge", []),
+        initial_memory=mem,
+        services=d.get("services", []),
+        access_level=d.get("access_level", "standard"),
+        communication_style=d.get("communication_style", "professional"),
+        initiative=d.get("initiative", "moderate"),
+        caution_level=d.get("caution_level", "moderate"),
     )
 
 
