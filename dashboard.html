@@ -1,0 +1,400 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ACES — Agent Community Dashboard</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
+<style>
+  :root {
+    --bg: #0f0f11;
+    --bg2: #1a1a1e;
+    --bg3: #222228;
+    --border: rgba(255,255,255,0.08);
+    --text: #e8e8ea;
+    --muted: #888890;
+    --accent: #7c6ef7;
+    --green: #34c77b;
+    --red: #f05252;
+    --amber: #f59e0b;
+    --blue: #4a9eff;
+    --purple: #a78bfa;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--text); font-family: 'SF Mono', 'Fira Code', monospace; font-size: 13px; line-height: 1.6; min-height: 100vh; }
+
+  /* Layout */
+  .app { display: grid; grid-template-columns: 220px 1fr; min-height: 100vh; }
+  .sidebar { background: var(--bg2); border-right: 1px solid var(--border); padding: 1.5rem 1rem; position: sticky; top: 0; height: 100vh; overflow-y: auto; }
+  .main { padding: 2rem; overflow-y: auto; }
+
+  /* Sidebar */
+  .logo { font-size: 15px; font-weight: 600; color: var(--accent); margin-bottom: 0.5rem; letter-spacing: 0.05em; }
+  .logo-sub { font-size: 11px; color: var(--muted); margin-bottom: 2rem; }
+  .nav-label { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.1em; margin-bottom: 0.5rem; }
+  .nav-item { display: block; padding: 6px 10px; border-radius: 6px; color: var(--muted); text-decoration: none; cursor: pointer; margin-bottom: 2px; border: none; background: none; width: 100%; text-align: left; font-family: inherit; font-size: 13px; }
+  .nav-item:hover { background: var(--bg3); color: var(--text); }
+  .nav-item.active { background: rgba(124,110,247,0.15); color: var(--accent); }
+  .nav-item .dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; margin-right: 8px; }
+  .sidebar-divider { border: none; border-top: 1px solid var(--border); margin: 1rem 0; }
+
+  /* Upload */
+  .upload-zone { border: 1.5px dashed var(--border); border-radius: 12px; padding: 3rem 2rem; text-align: center; cursor: pointer; transition: all 0.2s; margin-bottom: 2rem; }
+  .upload-zone:hover { border-color: var(--accent); background: rgba(124,110,247,0.05); }
+  .upload-icon { font-size: 32px; margin-bottom: 1rem; }
+  .upload-title { font-size: 15px; font-weight: 600; margin-bottom: 0.5rem; }
+  .upload-sub { color: var(--muted); font-size: 12px; }
+  code { background: var(--bg3); padding: 2px 6px; border-radius: 4px; font-size: 11px; color: var(--green); }
+
+  /* Sections */
+  .section { display: none; }
+  .section.active { display: block; }
+  .page-title { font-size: 20px; font-weight: 600; margin-bottom: 0.25rem; }
+  .page-sub { color: var(--muted); font-size: 12px; margin-bottom: 1.5rem; }
+
+  /* Metrics */
+  .metrics { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 2rem; }
+  .metric { background: var(--bg2); border: 1px solid var(--border); border-radius: 10px; padding: 1rem 1.25rem; }
+  .metric-label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 6px; }
+  .metric-value { font-size: 28px; font-weight: 600; }
+  .metric-value.green { color: var(--green); }
+  .metric-value.red { color: var(--red); }
+  .metric-value.purple { color: var(--purple); }
+
+  /* Cards */
+  .card { background: var(--bg2); border: 1px solid var(--border); border-radius: 10px; padding: 1.25rem; margin-bottom: 1rem; }
+  .card-title { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 1rem; }
+
+  /* Agents grid */
+  .agents-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+  .agent-card { background: var(--bg2); border: 1px solid var(--border); border-radius: 10px; padding: 1rem; transition: border-color 0.2s; cursor: pointer; }
+  .agent-card:hover { border-color: var(--accent); }
+  .agent-avatar { width: 36px; height: 36px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: 600; font-size: 13px; margin-bottom: 0.75rem; }
+  .agent-name { font-weight: 600; font-size: 13px; margin-bottom: 2px; }
+  .agent-role-badge { display: inline-block; font-size: 10px; padding: 2px 8px; border-radius: 20px; margin-bottom: 8px; }
+  .agent-stats-row { display: flex; justify-content: space-between; font-size: 11px; color: var(--muted); margin-top: 6px; }
+  .stat-val { color: var(--text); font-weight: 500; }
+  .status-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 4px; }
+  .status-healthy { background: var(--green); }
+  .status-compromised { background: var(--red); }
+  .status-quarantined { background: var(--amber); }
+
+  /* Timeline */
+  .timeline { display: flex; flex-direction: column; gap: 4px; }
+  .tl-item { display: flex; align-items: flex-start; gap: 12px; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--border); background: var(--bg2); }
+  .tl-day { font-size: 11px; color: var(--muted); min-width: 42px; padding-top: 2px; font-weight: 500; }
+  .tl-dot { width: 8px; height: 8px; border-radius: 50%; margin-top: 4px; flex-shrink: 0; }
+  .tl-text { font-size: 12px; flex: 1; line-height: 1.5; }
+  .tl-agent { color: var(--accent); font-weight: 600; }
+  .filter-row { display: flex; gap: 6px; margin-bottom: 12px; flex-wrap: wrap; }
+  .filter-btn { font-size: 11px; padding: 4px 12px; border-radius: 20px; border: 1px solid var(--border); background: transparent; color: var(--muted); cursor: pointer; font-family: inherit; }
+  .filter-btn.on { border-color: var(--accent); color: var(--accent); background: rgba(124,110,247,0.1); }
+
+  /* Incidents */
+  .incident-card { border-left: 3px solid var(--red); background: rgba(240,82,82,0.06); border-radius: 0 8px 8px 0; padding: 10px 14px; margin-bottom: 8px; }
+  .incident-title { font-weight: 600; color: var(--red); margin-bottom: 4px; }
+  .incident-meta { font-size: 11px; color: var(--muted); }
+
+  /* Memory */
+  .memory-entry { padding: 8px 12px; border-radius: 8px; border: 1px solid var(--border); margin-bottom: 6px; }
+  .memory-agent { color: var(--purple); font-weight: 600; font-size: 12px; }
+  .memory-key { color: var(--amber); font-size: 11px; margin: 2px 0; }
+  .memory-value { font-size: 12px; color: var(--muted); }
+  .memory-day { font-size: 10px; color: var(--muted); float: right; }
+
+  /* Chart */
+  .chart-wrap { position: relative; width: 100%; height: 220px; }
+
+  /* Role colors */
+  .role-manager { background: rgba(74,158,255,0.15); color: var(--blue); }
+  .role-engineer { background: rgba(52,199,123,0.15); color: var(--green); }
+  .role-security { background: rgba(240,82,82,0.15); color: var(--red); }
+  .role-finance { background: rgba(245,158,11,0.15); color: var(--amber); }
+  .role-support { background: rgba(255,255,255,0.08); color: var(--muted); }
+  .role-hr { background: rgba(167,139,250,0.15); color: var(--purple); }
+
+  .av-manager { background: rgba(74,158,255,0.2); color: var(--blue); }
+  .av-engineer { background: rgba(52,199,123,0.2); color: var(--green); }
+  .av-security { background: rgba(240,82,82,0.2); color: var(--red); }
+  .av-finance { background: rgba(245,158,11,0.2); color: var(--amber); }
+  .av-support { background: rgba(255,255,255,0.1); color: var(--muted); }
+  .av-hr { background: rgba(167,139,250,0.2); color: var(--purple); }
+
+  .empty { color: var(--muted); font-size: 13px; padding: 2rem; text-align: center; }
+
+  /* Run info */
+  .run-badge { display: inline-flex; align-items: center; gap: 6px; background: var(--bg3); border: 1px solid var(--border); border-radius: 20px; padding: 4px 12px; font-size: 11px; color: var(--muted); margin-bottom: 1rem; }
+  .run-badge .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--green); }
+</style>
+</head>
+<body>
+
+<div class="app">
+  <!-- Sidebar -->
+  <div class="sidebar">
+    <div class="logo">ACES</div>
+    <div class="logo-sub">Agent Community Simulator</div>
+
+    <div class="nav-label">Navigation</div>
+    <button class="nav-item active" onclick="nav('overview')">
+      <span class="dot" style="background:var(--accent)"></span>Overview
+    </button>
+    <button class="nav-item" onclick="nav('agents')">
+      <span class="dot" style="background:var(--blue)"></span>Agents
+    </button>
+    <button class="nav-item" onclick="nav('timeline')">
+      <span class="dot" style="background:var(--green)"></span>Timeline
+    </button>
+    <button class="nav-item" onclick="nav('incidents')">
+      <span class="dot" style="background:var(--red)"></span>Incidents
+    </button>
+    <button class="nav-item" onclick="nav('memory')">
+      <span class="dot" style="background:var(--purple)"></span>Memory
+    </button>
+
+    <hr class="sidebar-divider">
+    <div class="nav-label">Run Info</div>
+    <div id="sidebar-run" style="font-size:11px; color:var(--muted); padding: 0 10px; line-height:2;">
+      No data loaded
+    </div>
+  </div>
+
+  <!-- Main -->
+  <div class="main">
+
+    <!-- Upload -->
+    <div id="upload-zone" class="upload-zone" onclick="document.getElementById('fileInput').click()">
+      <input type="file" id="fileInput" accept=".json" style="display:none" onchange="loadFile(event)">
+      <div class="upload-icon">📂</div>
+      <div class="upload-title">Load simulation results</div>
+      <div class="upload-sub" style="margin-bottom:1rem">Click to select your <strong>export.json</strong> file</div>
+      <div class="upload-sub">Generate it with: <code>python export_results.py</code></div>
+    </div>
+
+    <!-- Overview -->
+    <div id="section-overview" class="section active">
+      <div class="page-title">Overview</div>
+      <div class="page-sub" id="run-sub">Load a simulation result to get started</div>
+
+      <div class="metrics">
+        <div class="metric"><div class="metric-label">Agents</div><div class="metric-value purple" id="m-agents">—</div></div>
+        <div class="metric"><div class="metric-label">Jobs completed</div><div class="metric-value green" id="m-jobs">—</div></div>
+        <div class="metric"><div class="metric-label">Incidents</div><div class="metric-value red" id="m-incidents">—</div></div>
+        <div class="metric"><div class="metric-label">Memory entries</div><div class="metric-value" id="m-memory">—</div></div>
+      </div>
+
+      <div class="card">
+        <div class="card-title">Jobs completed per day</div>
+        <div class="chart-wrap"><canvas id="jobsChart"></canvas></div>
+      </div>
+
+      <div class="card">
+        <div class="card-title">Wallet balance by agent</div>
+        <div class="chart-wrap"><canvas id="balanceChart"></canvas></div>
+      </div>
+    </div>
+
+    <!-- Agents -->
+    <div id="section-agents" class="section">
+      <div class="page-title">Agents</div>
+      <div class="page-sub">All agents in the simulation</div>
+      <div class="agents-grid" id="agents-grid">
+        <div class="empty">No data loaded</div>
+      </div>
+    </div>
+
+    <!-- Timeline -->
+    <div id="section-timeline" class="section">
+      <div class="page-title">Activity Timeline</div>
+      <div class="page-sub">All agent actions across the simulation</div>
+      <div class="filter-row">
+        <button class="filter-btn on" onclick="setFilter('all',this)">All</button>
+        <button class="filter-btn" onclick="setFilter('incident',this)">Incidents</button>
+        <button class="filter-btn" onclick="setFilter('job',this)">Jobs</button>
+        <button class="filter-btn" onclick="setFilter('mail',this)">Messages</button>
+        <button class="filter-btn" onclick="setFilter('memory',this)">Memory</button>
+      </div>
+      <div class="timeline" id="timeline">
+        <div class="empty">No data loaded</div>
+      </div>
+    </div>
+
+    <!-- Incidents -->
+    <div id="section-incidents" class="section">
+      <div class="page-title">Security Incidents</div>
+      <div class="page-sub">Attack injections and security events</div>
+      <div id="incidents-list"><div class="empty">No data loaded</div></div>
+    </div>
+
+    <!-- Memory -->
+    <div id="section-memory" class="section">
+      <div class="page-title">Agent Memory</div>
+      <div class="page-sub">What each agent has learned during the simulation</div>
+      <div class="filter-row" id="memory-filter-row"></div>
+      <div id="memory-list"><div class="empty">No data loaded</div></div>
+    </div>
+
+  </div>
+</div>
+
+<script>
+let allEvents = [], allMemory = [], curFilter = 'all', curMemAgent = 'all';
+let jobsChartInst, balanceChartInst;
+
+function nav(page) {
+  document.querySelectorAll('.section').forEach(s => s.classList.remove('active'));
+  document.querySelectorAll('.nav-item').forEach(b => b.classList.remove('active'));
+  document.getElementById('section-' + page).classList.add('active');
+  event.target.classList.add('active');
+}
+
+function loadFile(e) {
+  const f = e.target.files[0];
+  if (!f) return;
+  const r = new FileReader();
+  r.onload = ev => {
+    const data = JSON.parse(ev.target.result);
+    document.getElementById('upload-zone').style.display = 'none';
+    render(data);
+  };
+  r.readAsText(f);
+}
+
+function initials(name) {
+  return name.split(' ').map(w => w[0]).join('').slice(0,2).toUpperCase();
+}
+
+function render(d) {
+  // Run info
+  const run = d.run || {};
+  document.getElementById('run-sub').textContent = `Run: ${(run.id||'').slice(0,8)} · ${run.status||'unknown'}`;
+  document.getElementById('sidebar-run').innerHTML = `
+    <div>ID: <span style="color:var(--accent)">${(run.id||'—').slice(0,8)}</span></div>
+    <div>Status: ${run.status||'—'}</div>
+    <div>Agents: ${d.agents.length}</div>
+    <div>Incidents: ${d.incidents.length}</div>
+  `;
+
+  // Metrics
+  const completed = d.jobs.filter(j => j.status === 'completed');
+  document.getElementById('m-agents').textContent = d.agents.length;
+  document.getElementById('m-jobs').textContent = completed.length;
+  document.getElementById('m-incidents').textContent = d.incidents.length;
+  document.getElementById('m-memory').textContent = d.agent_memory.length;
+
+  // Charts
+  const dayMap = {};
+  completed.forEach(j => { const day = j.created_day||1; dayMap[day] = (dayMap[day]||0)+1; });
+  const days = Object.keys(dayMap).sort((a,b)=>+a-+b);
+
+  if (jobsChartInst) jobsChartInst.destroy();
+  jobsChartInst = new Chart(document.getElementById('jobsChart'), {
+    type: 'bar',
+    data: { labels: days.map(d => 'Day ' + d), datasets: [{ label: 'Jobs', data: days.map(d => dayMap[d]), backgroundColor: '#34c77b', borderRadius: 4 }] },
+    options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } },
+      scales: { x: { grid: { color: 'rgba(255,255,255,0.05)' }, ticks: { color: '#888890' } }, y: { beginAtZero: true, grid: { color: 'rgba(255,255,255,0.05)' }, ticks: { color: '#888890', stepSize: 1 } } } }
+  });
+
+  if (balanceChartInst) balanceChartInst.destroy();
+  balanceChartInst = new Chart(document.getElementById('balanceChart'), {
+    type: 'bar',
+    data: {
+      labels: d.agents.map(a => a.name.split(' ')[0]),
+      datasets: [{ label: 'Balance', data: d.agents.map(a => Math.round(a.wallet_balance)), backgroundColor: '#7c6ef7', borderRadius: 4 }]
+    },
+    options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } },
+      scales: { x: { grid: { color: 'rgba(255,255,255,0.05)' }, ticks: { color: '#888890' } }, y: { beginAtZero: true, grid: { color: 'rgba(255,255,255,0.05)' }, ticks: { color: '#888890' } } } }
+  });
+
+  // Agents
+  const memCount = {}, jobCount = {};
+  d.agent_memory.forEach(m => memCount[m.agent_id] = (memCount[m.agent_id]||0)+1);
+  completed.forEach(j => { if(j.assigned_to) jobCount[j.assigned_to] = (jobCount[j.assigned_to]||0)+1; });
+
+  document.getElementById('agents-grid').innerHTML = d.agents.map(a => `
+    <div class="agent-card">
+      <div class="agent-avatar av-${a.role}">${initials(a.name)}</div>
+      <div class="agent-name">${a.name}</div>
+      <span class="agent-role-badge role-${a.role}">${a.role}</span>
+      <div style="font-size:11px; color:var(--muted); margin-bottom:6px">
+        <span class="status-dot status-${a.status||'healthy'}"></span>${a.status||'healthy'} · ${a.zone}
+      </div>
+      <div class="agent-stats-row">
+        <span>Jobs <span class="stat-val">${jobCount[a.id]||0}</span></span>
+        <span>Balance <span class="stat-val">$${Math.round(a.wallet_balance)}</span></span>
+        <span>Memory <span class="stat-val">${memCount[a.id]||0}</span></span>
+      </div>
+    </div>
+  `).join('');
+
+  // Timeline events
+  allEvents = [];
+  d.incidents.forEach(i => allEvents.push({ day: i.sim_day_detected||0, type:'incident', text:`<span class="tl-agent">${i.target_agent_id}</span> hit by <strong style="color:var(--red)">${i.incident_type}</strong> attack — ${i.severity} severity` }));
+  completed.forEach(j => allEvents.push({ day: j.created_day||0, type:'job', text:`<span class="tl-agent">${j.assigned_to||'?'}</span> completed <em>${j.title}</em> <span style="color:var(--green)">+$${j.reward}</span>` }));
+  d.messages.forEach(m => allEvents.push({ day:0, type:'mail', text:`<span class="tl-agent">${m.sender_id}</span> → <span class="tl-agent">${m.recipient_id}</span>: ${m.subject}` }));
+  d.agent_memory.filter(m=>m.sim_day_updated>0).forEach(m => allEvents.push({ day:m.sim_day_updated, type:'memory', text:`<span class="tl-agent">${m.agent_id}</span> memory: <span style="color:var(--muted)">${m.value.slice(0,100)}</span>` }));
+  allEvents.sort((a,b) => b.day - a.day);
+  renderTimeline();
+
+  // Incidents
+  document.getElementById('incidents-list').innerHTML = d.incidents.length
+    ? d.incidents.map(i => `
+        <div class="incident-card">
+          <div class="incident-title">${i.incident_type.toUpperCase()} — Day ${i.sim_day_detected}</div>
+          <div class="incident-meta">Target: ${i.target_agent_id} · Severity: ${i.severity} · Attack class: ${i.attack_class||'—'}</div>
+          ${i.details ? `<div style="font-size:11px;color:var(--muted);margin-top:6px">${i.details}</div>` : ''}
+        </div>`).join('')
+    : '<div class="empty">No incidents recorded</div>';
+
+  // Memory
+  allMemory = d.agent_memory;
+  const agentIds = [...new Set(d.agent_memory.map(m => m.agent_id))];
+  document.getElementById('memory-filter-row').innerHTML =
+    `<button class="filter-btn on" onclick="setMemFilter('all',this)">All</button>` +
+    agentIds.map(id => `<button class="filter-btn" onclick="setMemFilter('${id}',this)">${id}</button>`).join('');
+  renderMemory();
+}
+
+function setFilter(t, btn) {
+  curFilter = t;
+  document.querySelectorAll('.filter-row .filter-btn').forEach(b => b.classList.remove('on'));
+  btn.classList.add('on');
+  renderTimeline();
+}
+
+function renderTimeline() {
+  const dotColors = { incident:'var(--red)', job:'var(--green)', mail:'var(--blue)', memory:'var(--purple)' };
+  const filtered = curFilter === 'all' ? allEvents : allEvents.filter(e => e.type === curFilter);
+  document.getElementById('timeline').innerHTML = filtered.length
+    ? filtered.map(e => `
+        <div class="tl-item">
+          <div class="tl-day">${e.day > 0 ? 'Day ' + e.day : '—'}</div>
+          <div class="tl-dot" style="background:${dotColors[e.type]||'var(--muted)'}"></div>
+          <div class="tl-text">${e.text}</div>
+        </div>`).join('')
+    : '<div class="empty">No events to show</div>';
+}
+
+function setMemFilter(agent, btn) {
+  curMemAgent = agent;
+  document.querySelectorAll('#memory-filter-row .filter-btn').forEach(b => b.classList.remove('on'));
+  btn.classList.add('on');
+  renderMemory();
+}
+
+function renderMemory() {
+  const filtered = curMemAgent === 'all' ? allMemory : allMemory.filter(m => m.agent_id === curMemAgent);
+  const sorted = [...filtered].sort((a,b) => b.sim_day_updated - a.sim_day_updated);
+  document.getElementById('memory-list').innerHTML = sorted.length
+    ? sorted.map(m => `
+        <div class="memory-entry">
+          <span class="memory-day">Day ${m.sim_day_updated||0}</span>
+          <div class="memory-agent">${m.agent_id}</div>
+          <div class="memory-key">[${m.category}] ${m.key}</div>
+          <div class="memory-value">${m.value}</div>
+        </div>`).join('')
+    : '<div class="empty">No memory entries</div>';
+}
+</script>
+</body>
+</html>

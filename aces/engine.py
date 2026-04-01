@@ -14,7 +14,7 @@ from .models import (
     AgentState, AgentStatus, AgentRole, ApproveJobAction, ClaimJobAction,
     CompleteJobAction, DelegateAction, DelegationType, Event, EventType,
     FailJobAction, Job, JobStatus, JobType, LedgerEntry, LedgerEntryType,
-    Message, MetricSnapshot, MoltbookAction, NoOpAction, ReadDocAction,
+    MemoryEntry, Message, MetricSnapshot, MoltbookAction, NoOpAction, ReadDocAction,
     RespondDelegationAction, RunRecord, SendMailAction, UpdateDocAction,
     WebHostBrowseAction, WebHostSSHAction, Zone, _now, _uid,
 )
@@ -241,6 +241,16 @@ class TurnManager:
                 sim_day=sim_day, sim_tick=sim_tick,
                 payload={"job_id": action.job_id, "tokens": tokens, "reward": reward},
             ))
+            # Update work memory after completing a job
+            if job:
+                self.db.upsert_memory(MemoryEntry(
+                    agent_id=agent.id,
+                    category="work",
+                    key=f"completed_job_{action.job_id[:8]}",
+                    value=f"Completed '{job.title}' on day {sim_day}. Reward: {reward}",
+                    sim_day_created=sim_day,
+                    sim_day_updated=sim_day,
+                ))
             return True, tokens, 1
 
         if isinstance(action, ApproveJobAction):
@@ -315,6 +325,16 @@ class TurnManager:
                     action.description, job_id=action.job_id,
                     sim_day=sim_day, sim_tick=sim_tick,
                 )
+                # Update contact memory after delegation
+                if deleg and delegate_id:
+                    self.db.upsert_memory(MemoryEntry(
+                        agent_id=agent.id,
+                        category="contacts",
+                        key=delegate_id,
+                        value=f"Delegated '{action.description}' to them on day {sim_day}",
+                        sim_day_created=sim_day,
+                        sim_day_updated=sim_day,
+                    ))
                 return deleg is not None, 0, 1
             return False, 0, 0
 
