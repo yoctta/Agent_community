@@ -19,4 +19,5 @@ EXPOSE 3000
 #   JWT_SECRET    — secret for token signing
 #   REDIS_URL     — optional, for rate limiting
 
-CMD ["node", "src/index.js"]
+# Run migrations then start the server.
+CMD ["sh", "-c", "npm run db:migrate && node src/index.js"]

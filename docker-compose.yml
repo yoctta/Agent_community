@@ -8,8 +8,8 @@
 #   2. python docker/generate_agent_configs.py   # create agent workspaces
 #   3. docker compose up             # start all agents + simulator
 #
-# To run with mock agents (no LLM, no OpenClaw):
-#   docker compose run simulator single --backend mock --seed 42
+# To run with a direct LLM call (no OpenClaw):
+#   docker compose run simulator single --backend anthropic --model claude-sonnet-4-20250514
 
 x-openclaw-agent: &openclaw-agent
   image: ghcr.io/openclaw/openclaw:latest

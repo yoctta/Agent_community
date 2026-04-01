@@ -35,11 +35,12 @@ Each agent is a fully autonomous [OpenClaw](https://github.com/openclaw/openclaw
 
 ## Quickstart
 
-### Option A: Mock agents (no LLM, no Docker — instant)
+### Option A: Direct LLM (no Docker)
 
 ```bash
-pip install pyyaml
-python run_experiment.py single --backend mock --seed 42
+pip install pyyaml httpx
+python run_experiment.py single \
+  --backend anthropic --model claude-sonnet-4-20250514 --api-key sk-ant-...
 ```
 
 ### Option B: Docker Compose with OpenClaw agents
@@ -178,7 +179,7 @@ The pattern for adding a new service:
 3. Register in the service registry
 4. Add an execution handler in the engine
 5. Add OpenClaw tool definitions
-6. Optionally add mock agent behavior and attack templates
+6. Optionally add attack templates for the new service
 
 Example services you could add: GitHub API (code hosting), Slack API (real-time chat), Notion API (knowledge base), Grafana API (monitoring dashboards), or any REST API.
 
@@ -192,7 +193,7 @@ aces/                        # Core Python package
   network.py                 # Zone topology and access control (flat/weak/strong)
   services.py                # Enterprise services: mail, delegation, wiki, vault, IAM
   moltbook.py                # Moltbook integration (ExtNet social network)
-  runtime.py                 # Agent runtime: mock (rule-based) + LLM adapter
+  runtime.py                 # Agent runtime: LLM adapter (any OpenAI-compatible API)
   openclaw_runtime.py         # OpenClaw gateway integration (tool-calling)
   engine.py                  # Simulation engine: day/tick loop, turns, barrier
   attacks.py                 # Attack injection framework
@@ -221,9 +222,12 @@ Dockerfile                   # Simulator container image
 
 | Backend | Flag | What it does |
 |---------|------|--------------|
-| `mock` | `--backend mock` | Deterministic rule-based agents with role-specific behavioral profiles. No LLM, no network. For testing and baseline experiments. |
 | `openclaw` | `--backend openclaw` | Each agent is a full OpenClaw instance. The simulator sends observations and tool definitions via the OpenAI-compatible HTTP API; agents reason autonomously and call enterprise tools. |
-| `openai` / `anthropic` | `--backend openai` | Direct LLM API calls without OpenClaw. Lighter weight, single-process. |
+| `anthropic` | `--backend anthropic` | Direct Anthropic API calls (native `/v1/messages`). Lighter weight, single-process. |
+| `openai` | `--backend openai` | Direct OpenAI API calls. |
+| `openrouter` | `--backend openrouter` | OpenRouter — access any model from any provider. |
+| `ollama` | `--backend ollama` | Local Ollama instance. No API key needed. |
+| Any other | `--backend NAME --base-url URL` | Any OpenAI-compatible endpoint (Together, vLLM, LiteLLM, etc.). |
 
 ## Experimental factors
 
@@ -253,7 +257,7 @@ Full factorial: 2^5 = 32 conditions. Fractional (resolution III): 8 conditions.
 ## CLI reference
 
 ```bash
-python run_experiment.py single --backend mock --seed 42     # one run
+python run_experiment.py single --backend anthropic --api-key sk-... --seed 42  # one run
 python run_experiment.py run                                  # full experiment
 python run_experiment.py conditions                           # list all conditions
 python run_experiment.py analyze -o results                   # tabulate results

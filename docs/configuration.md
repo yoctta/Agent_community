@@ -216,11 +216,6 @@ Changes take effect on the next `docker compose up`.
 
 ## Common recipes
 
-**Run only with mock agents (no LLM cost):**
-```bash
-python run_experiment.py single --backend mock --seed 42
-```
-
 **Run a quick screening (8 conditions instead of 32):**
 ```yaml
 # In config/experiment.yaml:

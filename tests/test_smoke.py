@@ -1,13 +1,21 @@
-"""Smoke tests: verify the full pipeline runs end-to-end."""
+"""Smoke tests: verify the full pipeline runs end-to-end.
+
+Tests use StubRuntime (a minimal deterministic agent) so they run
+without an LLM API key.  Production code uses LLMAgentRuntime or
+OpenClawRuntime — both backed by real LLMs.
+"""
 
 from __future__ import annotations
 
 import os
+import random
 import sys
 import tempfile
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from tests.stub_runtime import StubRuntime
 
 from aces.config import (
     ACESConfig, DefenseOverrides, ExperimentConfig, FactorDef,
@@ -118,7 +126,7 @@ class TestFactorial(unittest.TestCase):
 
 class TestSingleRun(unittest.TestCase):
     def test_baseline_run(self):
-        """Run a minimal 3-day simulation with mock agents."""
+        """Run a minimal 3-day simulation with stub runtime."""
         cfg_dir = os.path.join(os.path.dirname(os.path.dirname(
             os.path.abspath(__file__))), "config")
         cfg = load_config(
@@ -127,11 +135,12 @@ class TestSingleRun(unittest.TestCase):
             attack_path=os.path.join(cfg_dir, "attacks.yaml"),
         )
         cfg.experiment.days_per_run = 3
-        cfg.llm_backend = "mock"
 
+        stub = StubRuntime(rng=random.Random(42))
         with tempfile.TemporaryDirectory() as tmpdir:
             cond = Condition(name="test_baseline", factor_levels={})
-            result = run_single(cfg, cond, seed=42, output_dir=tmpdir)
+            result = run_single(cfg, cond, seed=42, output_dir=tmpdir,
+                                runtime_override=stub)
 
         self.assertEqual(result["status"], "completed")
         self.assertEqual(result["final_day"], 3)
@@ -161,13 +170,13 @@ class TestBugFixes(unittest.TestCase):
         """Verify salary credits actually reach agent wallet balances."""
         cfg = self._make_cfg()
         cfg.experiment.days_per_run = 2
-        cfg.llm_backend = "mock"
-        # Disable attacks so only payroll affects balance.
         cfg.attacks.enabled_classes = []
 
+        stub = StubRuntime(rng=random.Random(99))
         with tempfile.TemporaryDirectory() as tmpdir:
             cond = Condition(name="payroll_test", factor_levels={})
-            result = run_single(cfg, cond, seed=99, output_dir=tmpdir)
+            result = run_single(cfg, cond, seed=99, output_dir=tmpdir,
+                                runtime_override=stub)
 
             # Re-open the DB and check balances grew.
             from aces.database import Database
@@ -224,16 +233,16 @@ class TestBugFixes(unittest.TestCase):
         """Attacks inject before agent turns so agents see attack mail."""
         cfg = self._make_cfg()
         cfg.experiment.days_per_run = 5
-        cfg.llm_backend = "mock"
-        # Force a single early attack.
         cfg.attacks.templates = [cfg.attacks.templates[0]]  # phishing only
         cfg.attacks.templates[0].earliest_day = 1
         cfg.attacks.templates[0].latest_day = 1
         cfg.attacks.templates[0].probability = 1.0
 
+        stub = StubRuntime(rng=random.Random(42))
         with tempfile.TemporaryDirectory() as tmpdir:
             cond = Condition(name="timing_test", factor_levels={})
-            result = run_single(cfg, cond, seed=42, output_dir=tmpdir)
+            result = run_single(cfg, cond, seed=42, output_dir=tmpdir,
+                                runtime_override=stub)
 
             from aces.database import Database
             from aces.models import EventType
@@ -252,9 +261,7 @@ class TestBugFixes(unittest.TestCase):
         from aces.network import AccessControl, ZoneTopology
         from aces.config import DefenseOverrides
         from aces.engine import TurnManager
-        from aces.runtime import MockAgentRuntime
         from aces.services import ServiceRegistry
-        import random
 
         db = Database(":memory:")
         mgr = AgentState(id="mgr", name="Mgr", role=AgentRole.MANAGER,
@@ -269,7 +276,7 @@ class TestBugFixes(unittest.TestCase):
         defenses = DefenseOverrides(segmentation="flat")
         acl = AccessControl.from_config(cfg.enterprise, defenses)
         svc = ServiceRegistry.build(db, acl, defenses)
-        rt = MockAgentRuntime(rng=random.Random(42))
+        rt = StubRuntime(rng=random.Random(42))
         tm = TurnManager(db, svc, rt, acl, defenses, random.Random(42))
 
         obs = tm._build_observation(mgr, sim_day=1, sim_tick=1)

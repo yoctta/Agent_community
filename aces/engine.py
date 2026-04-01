@@ -215,8 +215,16 @@ class TurnManager:
             my_jobs = self.db.get_agent_jobs(agent.id)
             if not any(j.id == action.job_id for j in my_jobs):
                 return False, 0, 0
-            # Fetch reward before marking complete (status will change).
             job = self.db.get_job(action.job_id)
+            # Block completion if approval is required but not granted.
+            if job and job.requires_approval and not job.approved_by:
+                log.info("completion blocked: job %s requires approval", action.job_id)
+                return False, 0, 0
+            # Block completion if multi-step job hasn't reached final phase.
+            if job and job.phases and job.current_phase < len(job.phases) - 1:
+                log.info("completion blocked: job %s at phase %d/%d",
+                         action.job_id, job.current_phase, len(job.phases))
+                return False, 0, 0
             reward = job.reward if job else 10.0
             self.db.complete_job(action.job_id)
             agent.jobs_completed += 1
@@ -350,6 +358,13 @@ class TurnManager:
         if isinstance(action, ReadDocAction):
             if self.svc.wiki:
                 doc = self.svc.wiki.read(agent, action.document_id)
+                if doc:
+                    self.db.upsert_memory(MemoryEntry(
+                        agent_id=agent.id, category="knowledge",
+                        key=f"read_doc_{doc.id[:8]}",
+                        value=f"Read '{doc.title}' (v{doc.version}) on day {sim_day}",
+                        sim_day_created=sim_day, sim_day_updated=sim_day,
+                    ))
                 return doc is not None, 0, 1
             return False, 0, 0
 

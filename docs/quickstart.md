@@ -2,30 +2,18 @@
 
 ACES runs a simulated enterprise where 12 AI agents work, communicate, and collaborate across segmented intranets.
 
-## Three ways to run
+## Two ways to run
 
-| Mode | LLM needed? | Docker needed? | Best for |
-|------|:-----------:|:--------------:|----------|
-| Mock agents | No | No | Testing, development, quick experiments |
-| Direct LLM | Yes | No | Lightweight runs without OpenClaw |
-| OpenClaw agents | Yes | Yes | Full autonomous agent simulation |
+| Mode | Docker needed? | Best for |
+|------|:--------------:|----------|
+| Direct LLM | No | Lightweight runs without OpenClaw |
+| OpenClaw agents | Yes | Full autonomous agent simulation |
 
----
-
-## Mode 1: Mock agents (no LLM, no cost)
-
-Agents use deterministic rule-based behavior. No API key needed.
-
-```bash
-pip install pyyaml
-python run_experiment.py single --backend mock --seed 42
-```
-
-This runs a full 30-day simulation in ~1 second.
+Both require an LLM API key (Anthropic, OpenAI, OpenRouter, Ollama, or any OpenAI-compatible provider).
 
 ---
 
-## Mode 2: Direct LLM API
+## Mode 1: Direct LLM API
 
 The simulator calls Anthropic or OpenAI directly for each agent decision. No Docker, no OpenClaw.
 
@@ -51,7 +39,7 @@ How it works: the simulator formats each agent's observation (inbox, jobs, deleg
 
 ---
 
-## Mode 3: OpenClaw agents (full Docker stack)
+## Mode 2: OpenClaw agents (full Docker stack)
 
 Each agent runs as an autonomous OpenClaw instance in its own Docker container with its own LLM connection.
 

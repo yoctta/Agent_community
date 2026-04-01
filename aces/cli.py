@@ -159,8 +159,8 @@ def main() -> None:
                         help="Attack config YAML")
         p.add_argument("--output", "-o", default="results",
                         help="Output directory")
-        p.add_argument("--backend", default="mock",
-                        help="Agent runtime: mock, openclaw, anthropic, openai, "
+        p.add_argument("--backend", default="openai",
+                        help="Agent runtime: openclaw, anthropic, openai, "
                              "openrouter, together, ollama, or any OpenAI-compatible name")
         p.add_argument("--model", default="", help="LLM model name")
         p.add_argument("--api-key", default="", help="LLM API key")

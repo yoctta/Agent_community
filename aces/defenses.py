@@ -201,36 +201,34 @@ class DefenseManager:
     # ------------------------------------------------------------------
 
     def _check_recovery(self, agent: AgentState, sim_day: int) -> None:
-        """Probabilistic recovery for distracted/degraded agents."""
+        """Probabilistic recovery for distracted/degraded agents.
+        Also resolves open incidents when an agent recovers to healthy."""
+        recovered = False
+        old_status = agent.status.value
+
         if agent.status == AgentStatus.DISTRACTED:
             if self.rng.random() < 0.5:
                 agent.status = AgentStatus.HEALTHY
-                self.db.update_agent(agent)
-                self.db.append_event(Event(
-                    event_type=EventType.AGENT_STATUS_CHANGE,
-                    agent_id=agent.id, sim_day=sim_day, sim_tick=0,
-                    payload={"old": "distracted", "new": "healthy",
-                             "reason": "natural_recovery"},
-                ))
+                recovered = True
         elif agent.status == AgentStatus.DEGRADED:
             if self.rng.random() < 0.3:
                 agent.status = AgentStatus.HEALTHY
-                self.db.update_agent(agent)
-                self.db.append_event(Event(
-                    event_type=EventType.AGENT_STATUS_CHANGE,
-                    agent_id=agent.id, sim_day=sim_day, sim_tick=0,
-                    payload={"old": "degraded", "new": "healthy",
-                             "reason": "natural_recovery"},
-                ))
+                recovered = True
         elif agent.status == AgentStatus.QUARANTINED:
-            # Quarantined agents can only recover if trust is restored
-            # and key rotation has been done.
             if self.defenses.recovery_quarantine and agent.trust_score >= 0.5:
                 agent.status = AgentStatus.HEALTHY
-                self.db.update_agent(agent)
-                self.db.append_event(Event(
-                    event_type=EventType.AGENT_STATUS_CHANGE,
-                    agent_id=agent.id, sim_day=sim_day, sim_tick=0,
-                    payload={"old": "quarantined", "new": "healthy",
-                             "reason": "trust_restored"},
-                ))
+                recovered = True
+                old_status = "quarantined"
+
+        if recovered:
+            self.db.update_agent(agent)
+            self.db.append_event(Event(
+                event_type=EventType.AGENT_STATUS_CHANGE,
+                agent_id=agent.id, sim_day=sim_day, sim_tick=0,
+                payload={"old": old_status, "new": "healthy",
+                         "reason": "recovery"},
+            ))
+            # Resolve all open incidents targeting this agent.
+            for inc in self.db.get_open_incidents():
+                if inc.target_agent_id == agent.id:
+                    self.db.resolve_incident(inc.id, sim_day)

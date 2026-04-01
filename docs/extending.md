@@ -299,21 +299,7 @@ if name in ("search_agentstack", "ask_on_agentstack", "answer_on_agentstack"):
     )
 ```
 
-### Step 7: Update mock agent behavior (optional)
-
-In `aces/runtime.py`, add AgentStack engagement to `_community_engagement` or create a role-specific method. For example, engineers might search AgentStack when stuck:
-
-```python
-# In _engineer_work, when a job is hard:
-if budget > 0 and self.rng.random() < 0.1:
-    actions.append(AgentStackAction(
-        agent_id=agent.id,
-        agentstack_action="search",
-        params={"query": f"{job.title} solution"},
-    ))
-```
-
-### Step 8: Add configuration (optional)
+### Step 7: Add configuration (optional)
 
 In `aces/config.py`, add to `ACESConfig`:
 

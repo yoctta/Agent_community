@@ -201,7 +201,7 @@ class ACESConfig:
     defenses: DefenseOverrides = field(default_factory=DefenseOverrides)
     db_path: str = "aces_data.db"
     log_level: str = "INFO"
-    llm_backend: str = "mock"  # mock | openclaw | anthropic | openai | openrouter | together | ollama | ...
+    llm_backend: str = "openai"  # openclaw | anthropic | openai | openrouter | together | ollama | ...
     llm_model: str = ""
     llm_api_key: str = ""
     llm_base_url: str = ""     # auto-detected for known providers; override for custom endpoints

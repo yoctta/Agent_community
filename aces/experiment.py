@@ -143,8 +143,15 @@ def generate_conditions(experiment: ExperimentConfig) -> list[Condition]:
 # ---------------------------------------------------------------------------
 
 def run_single(cfg: ACESConfig, condition: Condition, seed: int,
-               output_dir: str | None = None) -> dict[str, Any]:
-    """Execute one simulation run with the given condition and seed."""
+               output_dir: str | None = None,
+               runtime_override: Any = None) -> dict[str, Any]:
+    """Execute one simulation run with the given condition and seed.
+
+    Args:
+        runtime_override: If provided, use this AgentRuntime instead of
+            creating one from ``cfg.llm_backend``.  Used by tests to
+            inject a stub runtime without requiring an LLM API key.
+    """
     run_id = _uid()
     rng = random.Random(seed)
 
@@ -164,11 +171,14 @@ def run_single(cfg: ACESConfig, condition: Condition, seed: int,
     db = Database(db_path)
 
     # Runtime.
-    runtime = create_runtime(
-        cfg.llm_backend, model=cfg.llm_model,
-        api_key=cfg.llm_api_key, base_url=cfg.llm_base_url,
-        seed=seed,
-    )
+    if runtime_override is not None:
+        runtime = runtime_override
+    else:
+        runtime = create_runtime(
+            cfg.llm_backend, model=cfg.llm_model,
+            api_key=cfg.llm_api_key, base_url=cfg.llm_base_url,
+            seed=seed,
+        )
 
     # Engine.
     engine = SimulationEngine(run_cfg, db, runtime, run_id, rng)
