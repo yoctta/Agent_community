@@ -259,6 +259,10 @@ python run_experiment.py conditions                           # list all conditi
 python run_experiment.py analyze -o results                   # tabulate results
 ```
 
+## Known gaps and future work
+
+See [TODO.md](TODO.md) for unfinished work: agent memory writes during simulation, mock agent personality traits, approval enforcement on multi-step jobs, PostgreSQL/NATS support, test coverage for new services, and more.
+
 ## License
 
 MIT

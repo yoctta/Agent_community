@@ -23,7 +23,9 @@
       "Bash(git status:*)",
       "Bash(git add:*)",
       "Bash(git commit:*)",
-      "Bash(git push:*)"
+      "Bash(git push:*)",
+      "Bash(grep -n \"unused\\\\|dead\\\\|import\" /share/zhaohanq/workspace/Agent_community/aces/*.py)",
+      "Bash(grep -i \"unused\\\\|import.*\\\\*\\\\|^.*import.*$\")"
     ]
   }
 }
