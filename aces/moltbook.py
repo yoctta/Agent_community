@@ -72,7 +72,7 @@ class MoltbookService:
     def __init__(self, db: Database, acl: AccessControl, *,
                  mode: str = "simulated",
                  api_key: str = "",
-                 base_url: str = "https://www.moltbook.com/api/v1",
+                 base_url: str = "http://moltbook:3000/api/v1",
                  default_submolt: str = "enterprise"):
         self.db = db
         self.acl = acl

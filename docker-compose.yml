@@ -12,11 +12,16 @@
 #   docker compose run simulator single --backend mock --seed 42
 
 x-openclaw-agent: &openclaw-agent
-  image: openclaw/openclaw:latest
+  image: ghcr.io/openclaw/openclaw:latest
   restart: unless-stopped
   env_file: .env
   environment:
     - LLM_API_KEY=${LLM_API_KEY}
+  healthcheck:
+    test: ["CMD", "wget", "-q", "--spider", "http://localhost:18789/healthz"]
+    interval: 10s
+    timeout: 5s
+    retries: 5
 
 services:
   # ---------------------------------------------------------------
@@ -34,14 +39,18 @@ services:
     ports: ["5433:5432"]
 
   moltbook:
-    image: ghcr.io/moltbook/api:latest
+    build:
+      context: ./docker
+      dockerfile: moltbook.Dockerfile
     restart: unless-stopped
     depends_on:
       moltbook-db: { condition: service_started }
     environment:
       DATABASE_URL: postgres://moltbook:moltbook@moltbook-db:5432/moltbook
-      PORT: "3001"
-    ports: ["3001:3001"]
+      PORT: "3000"
+      JWT_SECRET: aces-dev-secret
+      NODE_ENV: production
+    ports: ["3000:3000"]
 
   # ---------------------------------------------------------------
   # Simulator (ACES engine)
@@ -51,18 +60,18 @@ services:
     env_file: .env
     depends_on:
       moltbook:   { condition: service_started }
-      mgr-alice:  { condition: service_started }
-      mgr-bob:    { condition: service_started }
-      eng-carol:  { condition: service_started }
-      eng-dave:   { condition: service_started }
-      eng-eve:    { condition: service_started }
-      fin-frank:  { condition: service_started }
-      fin-grace:  { condition: service_started }
-      hr-henry:   { condition: service_started }
-      hr-iris:    { condition: service_started }
-      sec-jack:   { condition: service_started }
-      sec-karen:  { condition: service_started }
-      sup-leo:    { condition: service_started }
+      mgr-alice:  { condition: service_healthy }
+      mgr-bob:    { condition: service_healthy }
+      eng-carol:  { condition: service_healthy }
+      eng-dave:   { condition: service_healthy }
+      eng-eve:    { condition: service_healthy }
+      fin-frank:  { condition: service_healthy }
+      fin-grace:  { condition: service_healthy }
+      hr-henry:   { condition: service_healthy }
+      hr-iris:    { condition: service_healthy }
+      sec-jack:   { condition: service_healthy }
+      sec-karen:  { condition: service_healthy }
+      sup-leo:    { condition: service_healthy }
     volumes:
       - ./config:/app/config
       - ./results:/app/results
@@ -78,84 +87,84 @@ services:
     <<: *openclaw-agent
     hostname: mgr_alice
     volumes:
-      - ./docker/agents/mgr_alice:/root/.openclaw
+      - ./docker/agents/mgr_alice:/home/node/.openclaw
     ports: ["18701:18701"]
 
   mgr-bob:
     <<: *openclaw-agent
     hostname: mgr_bob
     volumes:
-      - ./docker/agents/mgr_bob:/root/.openclaw
+      - ./docker/agents/mgr_bob:/home/node/.openclaw
     ports: ["18702:18702"]
 
   eng-carol:
     <<: *openclaw-agent
     hostname: eng_carol
     volumes:
-      - ./docker/agents/eng_carol:/root/.openclaw
+      - ./docker/agents/eng_carol:/home/node/.openclaw
     ports: ["18703:18703"]
 
   eng-dave:
     <<: *openclaw-agent
     hostname: eng_dave
     volumes:
-      - ./docker/agents/eng_dave:/root/.openclaw
+      - ./docker/agents/eng_dave:/home/node/.openclaw
     ports: ["18704:18704"]
 
   eng-eve:
     <<: *openclaw-agent
     hostname: eng_eve
     volumes:
-      - ./docker/agents/eng_eve:/root/.openclaw
+      - ./docker/agents/eng_eve:/home/node/.openclaw
     ports: ["18705:18705"]
 
   fin-frank:
     <<: *openclaw-agent
     hostname: fin_frank
     volumes:
-      - ./docker/agents/fin_frank:/root/.openclaw
+      - ./docker/agents/fin_frank:/home/node/.openclaw
     ports: ["18706:18706"]
 
   fin-grace:
     <<: *openclaw-agent
     hostname: fin_grace
     volumes:
-      - ./docker/agents/fin_grace:/root/.openclaw
+      - ./docker/agents/fin_grace:/home/node/.openclaw
     ports: ["18707:18707"]
 
   hr-henry:
     <<: *openclaw-agent
     hostname: hr_henry
     volumes:
-      - ./docker/agents/hr_henry:/root/.openclaw
+      - ./docker/agents/hr_henry:/home/node/.openclaw
     ports: ["18708:18708"]
 
   hr-iris:
     <<: *openclaw-agent
     hostname: hr_iris
     volumes:
-      - ./docker/agents/hr_iris:/root/.openclaw
+      - ./docker/agents/hr_iris:/home/node/.openclaw
     ports: ["18709:18709"]
 
   sec-jack:
     <<: *openclaw-agent
     hostname: sec_jack
     volumes:
-      - ./docker/agents/sec_jack:/root/.openclaw
+      - ./docker/agents/sec_jack:/home/node/.openclaw
     ports: ["18710:18710"]
 
   sec-karen:
     <<: *openclaw-agent
     hostname: sec_karen
     volumes:
-      - ./docker/agents/sec_karen:/root/.openclaw
+      - ./docker/agents/sec_karen:/home/node/.openclaw
     ports: ["18711:18711"]
 
   sup-leo:
     <<: *openclaw-agent
     hostname: sup_leo
     volumes:
-      - ./docker/agents/sup_leo:/root/.openclaw
+      - ./docker/agents/sup_leo:/home/node/.openclaw
     ports: ["18712:18712"]
 
 volumes:

@@ -30,11 +30,20 @@ Unfinished work and known gaps between the design document and the current imple
 
 ## Docker / Infrastructure
 
-- [ ] **Verify `ghcr.io/moltbook/api:latest` exists** — the self-hosted Moltbook docker image reference is assumed. Pin to a known digest or add a fallback / health check. If the image doesn't exist, `docker compose up` will fail.
+- [x] ~~**Docker image `openclaw/openclaw:latest` does not exist**~~ — fixed: now uses `ghcr.io/openclaw/openclaw:latest`
+- [x] ~~**Config format was YAML, should be JSON5**~~ — fixed: `generate_agent_configs.py` now writes `openclaw.json` with correct schema
+- [x] ~~**Mount path `/root/.openclaw` wrong**~~ — fixed: now `/home/node/.openclaw` (matching real image)
+- [x] ~~**OpenAI-compatible API not enabled**~~ — fixed: config now sets `gateway.http.endpoints.chatCompletions.enabled: true`
+- [x] ~~**Agent selection used wrong model field**~~ — fixed: now uses `model: "openclaw:<agentId>"`
+- [x] ~~**No health checks**~~ — fixed: added `/healthz` health check, simulator uses `service_healthy`
+- [x] ~~**`ghcr.io/moltbook/api:latest` does not exist**~~ — fixed: Moltbook now built from source via `docker/moltbook.Dockerfile` (clones `github.com/moltbook/api`)
+- [x] ~~**Moltbook port was 3001, should be 3000**~~ — fixed
 
-- [ ] **Verify `openclaw/openclaw:latest` config format** — the gateway config template in `generate_agent_configs.py` is minimal. Verify it works against the actual OpenClaw image. Missing: tool plugin registration paths, context engine plugin config, auth profile setup.
+- [ ] **OpenClaw config may need further tuning** — the generated `openclaw.json` covers providers, agents, and HTTP endpoints, but does not register ACES tools as OpenClaw plugins (tools are passed per-request via the chat completions API instead). If OpenClaw requires explicit plugin registration for tool calling, this needs updating.
 
-- [ ] **No health checks in docker-compose** — containers start with `service_started` condition but no readiness probes. The simulator may try to connect to OpenClaw gateways before they're ready to accept requests.
+- [ ] **Moltbook needs `npm run db:migrate` on first run** — the Dockerfile starts the server but does not run migrations. The first start against a fresh PostgreSQL will fail. Add an entrypoint script that runs migrations before starting.
+
+- [ ] **No end-to-end test of `docker compose up`** — the full stack (12 OpenClaw gateways + Moltbook + simulator) has never been started together. First real run will likely surface integration issues.
 
 ## Test Coverage
 

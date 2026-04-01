@@ -25,7 +25,21 @@
       "Bash(git commit:*)",
       "Bash(git push:*)",
       "Bash(grep -n \"unused\\\\|dead\\\\|import\" /share/zhaohanq/workspace/Agent_community/aces/*.py)",
-      "Bash(grep -i \"unused\\\\|import.*\\\\*\\\\|^.*import.*$\")"
+      "Bash(grep -i \"unused\\\\|import.*\\\\*\\\\|^.*import.*$\")",
+      "Bash(docker pull:*)",
+      "Bash(curl -s \"https://registry.hub.docker.com/v2/repositories/openclaw/\")",
+      "Bash(command -v gh)",
+      "Bash(curl -s \"https://hub.docker.com/v2/repositories/openclaw/?page_size=25\")",
+      "WebSearch",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:www.moltbook.com)",
+      "WebFetch(domain:docs.openclaw.ai)",
+      "WebFetch(domain:www.npmjs.com)",
+      "Bash(gh api:*)",
+      "WebFetch(domain:openclaw-ai.com)",
+      "Bash(curl -s \"https://hub.docker.com/v2/repositories/alpine/openclaw/tags/?page_size=5\")",
+      "Bash(python3 -m json.tool)",
+      "Bash(curl -s \"https://ghcr.io/v2/openclaw/openclaw/tags/list\")"
     ]
   }
 }

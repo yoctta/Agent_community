@@ -370,8 +370,10 @@ class OpenClawRuntime(AgentRuntime):
             return None
 
         url = f"{endpoint.base_url}/v1/chat/completions"
+        # OpenClaw selects the agent via model field: "openclaw:<agentId>"
+        model_field = f"openclaw:{endpoint.agent_id}"
         payload: dict[str, Any] = {
-            "model": endpoint.model,
+            "model": model_field,
             "messages": messages,
             "tool_choice": "auto",
             "temperature": self.temperature,
