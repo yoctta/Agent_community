@@ -864,4 +864,10 @@ class Database:
                       "delegations", "documents", "jobs", "credentials",
                       "agent_memory", "agents", "metric_snapshots"):
             self.conn.execute(f"DELETE FROM {table}")
+        # Optional tables (created by services, may not exist yet).
+        for table in ("web_pages", "moltbook_posts", "moltbook_comments"):
+            try:
+                self.conn.execute(f"DELETE FROM {table}")
+            except Exception:
+                pass
         self.conn.commit()

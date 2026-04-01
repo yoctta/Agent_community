@@ -16,7 +16,7 @@ from .models import (
     FailJobAction, Job, JobStatus, JobType, LedgerEntry, LedgerEntryType,
     Message, MetricSnapshot, MoltbookAction, NoOpAction, ReadDocAction,
     RespondDelegationAction, RunRecord, SendMailAction, UpdateDocAction,
-    Zone, _now, _uid,
+    WebHostBrowseAction, WebHostSSHAction, Zone, _now, _uid,
 )
 from .network import AccessControl
 from .runtime import AgentRuntime
@@ -349,6 +349,64 @@ class TurnManager:
                     sim_day=sim_day, sim_tick=sim_tick,
                 )
                 return val is not None, 0, 1
+            return False, 0, 0
+
+        if isinstance(action, WebHostSSHAction):
+            if self.svc.webhost is None:
+                return False, 0, 0
+            wh = self.svc.webhost
+            p = action.params
+            if action.ssh_action == "create_page":
+                page = wh.ssh_create_page(
+                    agent, p.get("path", ""), p.get("title", ""),
+                    p.get("content", ""), zone=p.get("zone", "corpnet"),
+                    visibility=p.get("visibility", "internal"),
+                    sim_day=sim_day, sim_tick=sim_tick,
+                )
+                return page is not None, 0, 1
+            elif action.ssh_action == "edit_page":
+                ok = wh.ssh_edit_page(
+                    agent, p.get("path", ""), p.get("content", ""),
+                    sim_day=sim_day, sim_tick=sim_tick,
+                )
+                return ok, 0, 1
+            elif action.ssh_action == "delete_page":
+                ok = wh.ssh_delete_page(
+                    agent, p.get("path", ""),
+                    sim_day=sim_day, sim_tick=sim_tick,
+                )
+                return ok, 0, 1
+            elif action.ssh_action == "exec":
+                result = wh.ssh_exec(
+                    agent, p.get("command", ""),
+                    sim_day=sim_day, sim_tick=sim_tick,
+                )
+                return result is not None, 0, 1
+            elif action.ssh_action == "deploy":
+                count = wh.ssh_deploy(agent, sim_day=sim_day, sim_tick=sim_tick)
+                return count >= 0, 0, 1
+            elif action.ssh_action == "view_logs":
+                logs = wh.ssh_view_logs(agent, lines=p.get("lines", 20))
+                return len(logs) > 0, 0, 1
+            return False, 0, 0
+
+        if isinstance(action, WebHostBrowseAction):
+            if self.svc.webhost is None:
+                return False, 0, 0
+            wh = self.svc.webhost
+            p = action.params
+            if action.browse_action == "browse_page":
+                page = wh.browse_page(
+                    agent, p.get("path", ""),
+                    sim_day=sim_day, sim_tick=sim_tick,
+                )
+                return page is not None, 0, 1
+            elif action.browse_action == "list_pages":
+                pages = wh.list_pages(agent, zone=p.get("zone"), limit=p.get("limit", 20))
+                return len(pages) > 0, 0, 1
+            elif action.browse_action == "search_pages":
+                pages = wh.search_pages(agent, p.get("query", ""), limit=p.get("limit", 10))
+                return len(pages) > 0, 0, 1
             return False, 0, 0
 
         if isinstance(action, MoltbookAction):

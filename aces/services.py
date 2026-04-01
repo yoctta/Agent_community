@@ -330,6 +330,7 @@ class ServiceRegistry:
     vault: VaultService | None = None
     iam: IAMService | None = None
     moltbook: Any = None  # MoltbookService (imported lazily to avoid circular deps)
+    webhost: Any = None   # WebHostService
 
     @classmethod
     def build(cls, db: Database, acl: AccessControl,

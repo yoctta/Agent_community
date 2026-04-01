@@ -447,6 +447,22 @@ class AdvancePhaseAction(Action):
 
 
 @dataclass
+class WebHostSSHAction(Action):
+    """Privileged action on the web host (SSH tier — engineers/security only)."""
+    action_type: str = "webhost_ssh"
+    ssh_action: str = ""  # create_page | edit_page | delete_page | exec | deploy | view_logs
+    params: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class WebHostBrowseAction(Action):
+    """User-tier action on the web host (browser — all agents)."""
+    action_type: str = "webhost_browse"
+    browse_action: str = ""  # browse_page | list_pages | search_pages
+    params: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
 class MoltbookAction(Action):
     """Interaction with the Moltbook external agent social network."""
     action_type: str = "moltbook"

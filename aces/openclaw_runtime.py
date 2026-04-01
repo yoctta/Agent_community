@@ -43,7 +43,7 @@ from .models import (
     ApproveJobAction, ClaimJobAction, CompleteJobAction, DelegateAction,
     DelegationType, FailJobAction, NoOpAction, ReadDocAction,
     RespondDelegationAction, SendMailAction, UpdateDocAction,
-    AccessCredentialAction,
+    AccessCredentialAction, WebHostBrowseAction, WebHostSSHAction,
 )
 from .runtime import AgentRuntime
 
@@ -148,6 +148,55 @@ _TOOL_REGISTRY: list[tuple[dict[str, Any], str]] = [
           {"credential_id": {"type": "string"}},
           ["credential_id"], requires="vault"),
 
+    # --- WebHost SSH tools (engineers and security only) ---
+    # Tagged with "ssh" — a synthetic service added to engineer + security role sets.
+    _tool("ssh_create_page",
+          "Create a new page on the internal web server via SSH.",
+          {"path": {"type": "string", "description": "Page path e.g. /docs/runbook"},
+           "title": {"type": "string"},
+           "content": {"type": "string"},
+           "zone": {"type": "string", "description": "Host zone (corpnet/engnet/...)"},
+           "visibility": {"type": "string", "enum": ["internal", "public"]}},
+          ["path", "title", "content"], requires="ssh"),
+
+    _tool("ssh_edit_page",
+          "Edit an existing page on the web server via SSH.",
+          {"path": {"type": "string", "description": "Page path to edit"},
+           "content": {"type": "string", "description": "New page content"}},
+          ["path", "content"], requires="ssh"),
+
+    _tool("ssh_exec",
+          "Execute a shell command on the web server via SSH.",
+          {"command": {"type": "string", "description": "Shell command to run"}},
+          ["command"], requires="ssh"),
+
+    _tool("ssh_deploy",
+          "Deploy all draft pages on the web server.",
+          {}, requires="ssh"),
+
+    _tool("ssh_view_logs",
+          "View recent web server logs via SSH.",
+          {"lines": {"type": "integer", "description": "Number of log lines"}},
+          requires="ssh"),
+
+    # --- WebHost browse tools (all roles) ---
+    _tool("browse_page",
+          "Visit a published page on the internal web server.",
+          {"path": {"type": "string", "description": "Page path to visit"}},
+          ["path"], requires="wiki"),
+
+    _tool("list_intranet_pages",
+          "List published pages on the internal web server.",
+          {"zone": {"type": "string", "description": "Filter by zone (optional)"},
+           "limit": {"type": "integer", "description": "Max pages to list"}},
+          requires="wiki"),
+
+    _tool("search_intranet",
+          "Search page content on the internal web server.",
+          {"query": {"type": "string", "description": "Search query"},
+           "limit": {"type": "integer", "description": "Max results"}},
+          ["query"], requires="wiki"),
+
     # --- Moltbook tools (roles with 'moltbook' service) ---
     _tool("read_moltbook_feed",
           "Read the latest posts from Moltbook (external agent social network).",
@@ -165,11 +214,11 @@ _TOOL_REGISTRY: list[tuple[dict[str, Any], str]] = [
 # Pre-built service tag for each role (mirrors IAMService.ROLE_SERVICES).
 ROLE_SERVICES: dict[str, set[str]] = {
     "manager":  {"mail", "delegation", "wiki", "vault", "jobs", "iam", "*"},
-    "engineer": {"mail", "delegation", "wiki", "vault", "jobs", "repo", "ci", "*"},
+    "engineer": {"mail", "delegation", "wiki", "vault", "jobs", "repo", "ci", "ssh", "*"},
     "finance":  {"mail", "delegation", "wiki", "vault", "payroll", "budget", "*"},
     "hr":       {"mail", "delegation", "wiki", "vault", "personnel", "*"},
     "security": {"mail", "delegation", "wiki", "vault", "iam", "monitoring",
-                 "jobs", "moltbook", "*"},
+                 "jobs", "moltbook", "ssh", "*"},
     "support":  {"mail", "delegation", "wiki", "jobs", "ticketing", "moltbook", "*"},
 }
 
@@ -495,6 +544,28 @@ class OpenClawRuntime(AgentRuntime):
             return AdvancePhaseAction(
                 agent_id=agent_id, job_id=args.get("job_id", ""),
             )
+        # WebHost SSH tools (privileged).
+        if name in ("ssh_create_page", "ssh_edit_page", "ssh_exec",
+                     "ssh_deploy", "ssh_view_logs"):
+            action_map = {
+                "ssh_create_page": "create_page", "ssh_edit_page": "edit_page",
+                "ssh_exec": "exec", "ssh_deploy": "deploy",
+                "ssh_view_logs": "view_logs",
+            }
+            return WebHostSSHAction(
+                agent_id=agent_id, ssh_action=action_map[name], params=args,
+            )
+        # WebHost browse tools (user-tier).
+        if name in ("browse_page", "list_intranet_pages", "search_intranet"):
+            action_map = {
+                "browse_page": "browse_page",
+                "list_intranet_pages": "list_pages",
+                "search_intranet": "search_pages",
+            }
+            return WebHostBrowseAction(
+                agent_id=agent_id, browse_action=action_map[name], params=args,
+            )
+
         if name == "noop":
             return NoOpAction(agent_id=agent_id, reason=args.get("reason", ""))
 
