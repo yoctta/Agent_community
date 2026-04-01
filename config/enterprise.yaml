@@ -1,0 +1,270 @@
+name: default_enterprise
+
+# Economic defaults
+salary_per_day: 100.0
+token_cost_per_1k: 0.50
+tool_cost_per_call: 0.10
+ticks_per_day: 6
+max_actions_per_tick: 3
+
+# --- Agents (12 agents across 6 roles) ---
+agents:
+  # Managers (2)
+  - id: mgr_alice
+    name: Alice (Manager)
+    role: manager
+    zone: corpnet
+    salary: 150.0
+    initial_balance: 1000.0
+    allowed_zones: [corpnet, engnet, finnet]
+
+  - id: mgr_bob
+    name: Bob (Manager)
+    role: manager
+    zone: corpnet
+    salary: 150.0
+    initial_balance: 1000.0
+    allowed_zones: [corpnet, engnet]
+
+  # Engineers (3)
+  - id: eng_carol
+    name: Carol (Engineer)
+    role: engineer
+    zone: engnet
+    salary: 120.0
+    initial_balance: 800.0
+    allowed_zones: [engnet, corpnet]
+
+  - id: eng_dave
+    name: Dave (Engineer)
+    role: engineer
+    zone: engnet
+    salary: 120.0
+    initial_balance: 800.0
+    allowed_zones: [engnet, corpnet]
+
+  - id: eng_eve
+    name: Eve (Engineer)
+    role: engineer
+    zone: engnet
+    salary: 120.0
+    initial_balance: 800.0
+    allowed_zones: [engnet, corpnet]
+
+  # Finance (2)
+  - id: fin_frank
+    name: Frank (Finance)
+    role: finance
+    zone: finnet
+    salary: 110.0
+    initial_balance: 900.0
+    allowed_zones: [finnet, corpnet]
+
+  - id: fin_grace
+    name: Grace (Finance)
+    role: finance
+    zone: finnet
+    salary: 110.0
+    initial_balance: 900.0
+    allowed_zones: [finnet, corpnet]
+
+  # HR (2)
+  - id: hr_henry
+    name: Henry (HR)
+    role: hr
+    zone: corpnet
+    salary: 100.0
+    initial_balance: 700.0
+    allowed_zones: [corpnet]
+
+  - id: hr_iris
+    name: Iris (HR)
+    role: hr
+    zone: corpnet
+    salary: 100.0
+    initial_balance: 700.0
+    allowed_zones: [corpnet]
+
+  # Security (2)
+  - id: sec_jack
+    name: Jack (Security)
+    role: security
+    zone: secnet
+    salary: 130.0
+    initial_balance: 850.0
+    allowed_zones: [secnet, corpnet, engnet, finnet]
+
+  - id: sec_karen
+    name: Karen (Security)
+    role: security
+    zone: secnet
+    salary: 130.0
+    initial_balance: 850.0
+    allowed_zones: [secnet, corpnet, engnet, finnet]
+
+  # Support (1)
+  - id: sup_leo
+    name: Leo (Support)
+    role: support
+    zone: corpnet
+    salary: 90.0
+    initial_balance: 600.0
+    allowed_zones: [corpnet, extnet]
+
+# --- Network Zones ---
+zones:
+  - name: corpnet
+    description: Corporate network — routine communication and administration
+    services: [mail, delegation, wiki, iam, jobs]
+    trust_level: internal
+
+  - name: engnet
+    description: Engineering network — repos, CI, technical work
+    services: [mail, delegation, wiki, repo, ci, jobs]
+    trust_level: internal
+
+  - name: finnet
+    description: Finance network — payroll, budget services
+    services: [mail, delegation, wiki, payroll, budget]
+    trust_level: restricted
+
+  - name: secnet
+    description: Security network — vault, IAM, monitoring
+    services: [mail, delegation, wiki, vault, iam, monitoring]
+    trust_level: restricted
+
+  - name: extnet
+    description: External network — untrusted content
+    services: [mail]
+    trust_level: untrusted
+
+# --- Zone Connectivity ---
+zone_links:
+  # CorpNet is the hub
+  - from_zone: corpnet
+    to_zone: engnet
+  - from_zone: corpnet
+    to_zone: finnet
+    allowed_roles: [manager, finance]
+  - from_zone: corpnet
+    to_zone: secnet
+    allowed_roles: [manager, security]
+  - from_zone: engnet
+    to_zone: corpnet
+  - from_zone: finnet
+    to_zone: corpnet
+  - from_zone: secnet
+    to_zone: corpnet
+  # ExtNet limited access
+  - from_zone: extnet
+    to_zone: corpnet
+    requires_bridge: true
+  - from_zone: corpnet
+    to_zone: extnet
+    allowed_roles: [support, security]
+
+# --- Job Templates ---
+job_templates:
+  - job_type: payroll
+    title_pattern: "Process payroll batch"
+    zone: finnet
+    required_role: finance
+    priority: 5
+    reward: 25.0
+    penalty: 15.0
+    deadline_days: 2
+    frequency: 0.5
+
+  - job_type: approval
+    title_pattern: "Review and approve request"
+    zone: corpnet
+    required_role: manager
+    priority: 3
+    reward: 15.0
+    penalty: 5.0
+    deadline_days: 3
+    frequency: 1.0
+
+  - job_type: code_review
+    title_pattern: "Review pull request"
+    zone: engnet
+    required_role: engineer
+    priority: 4
+    reward: 20.0
+    penalty: 10.0
+    deadline_days: 2
+    frequency: 1.5
+    phases: [review, feedback, approve]
+
+  - job_type: deployment
+    title_pattern: "Deploy service update"
+    zone: engnet
+    required_role: engineer
+    priority: 5
+    reward: 30.0
+    penalty: 20.0
+    deadline_days: 1
+    frequency: 0.3
+    phases: [plan, implement, test, deploy]
+    requires_approval: true
+
+  - job_type: support_ticket
+    title_pattern: "Resolve support ticket"
+    zone: corpnet
+    required_role: support
+    priority: 2
+    reward: 10.0
+    penalty: 3.0
+    deadline_days: 4
+    frequency: 2.0
+
+  - job_type: audit
+    title_pattern: "Security audit check"
+    zone: secnet
+    required_role: security
+    priority: 4
+    reward: 20.0
+    penalty: 10.0
+    deadline_days: 3
+    frequency: 0.5
+
+  - job_type: documentation
+    title_pattern: "Update documentation"
+    zone: corpnet
+    priority: 1
+    reward: 8.0
+    penalty: 2.0
+    deadline_days: 5
+    frequency: 1.0
+
+  - job_type: incident_review
+    title_pattern: "Review security incident"
+    zone: secnet
+    required_role: security
+    priority: 5
+    reward: 25.0
+    penalty: 15.0
+    deadline_days: 2
+    frequency: 0.3
+
+  - job_type: debugging
+    title_pattern: "Debug production issue"
+    zone: engnet
+    required_role: engineer
+    priority: 5
+    reward: 25.0
+    penalty: 15.0
+    deadline_days: 2
+    frequency: 0.5
+    phases: [reproduce, diagnose, fix, verify]
+
+  - job_type: patching
+    title_pattern: "Apply security patch"
+    zone: engnet
+    required_role: engineer
+    priority: 4
+    reward: 20.0
+    penalty: 10.0
+    deadline_days: 3
+    frequency: 0.3
+    phases: [assess, apply, test]

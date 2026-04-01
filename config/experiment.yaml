@@ -1,0 +1,95 @@
+name: security_dynamics_study
+description: >
+  Two-phase study of security dynamics in a multi-agent enterprise.
+  Phase I: fractional factorial screening of 5 defense factors.
+  Phase II: full factorial of top 3 factors (configure separately).
+
+# Experiment design
+design: full_factorial     # full_factorial | fractional
+fractional_resolution: 3   # only used when design=fractional
+
+# Simulation parameters
+days_per_run: 30
+seeds: [42, 123, 456, 789, 1024]
+
+# Early stopping
+early_stop_insolvency: true
+insolvency_threshold: -1000.0
+early_stop_full_compromise: true
+
+# Baseline defense settings (Level 0 for all factors)
+baseline_defenses:
+  segmentation: flat
+  credential_scope: broad
+  credential_rotation: false
+  rotation_interval_days: 5
+  communication_discipline: free
+  clarification_gate: false
+  spend_cap_enabled: false
+  spend_cap_per_day: 500.0
+  spend_cap_action: downgrade
+  recovery_quarantine: false
+  recovery_trust_decay: false
+  trust_decay_rate: 0.1
+  recovery_key_rotation: false
+  loop_detection: true
+  loop_max_repeats: 5
+
+# --- Experimental Factors ---
+factors:
+  - name: network_segmentation
+    description: "Network design: flat vs strongly segmented intranets"
+    level0_label: flat
+    level1_label: segmented
+    level0_overrides:
+      segmentation: flat
+    level1_overrides:
+      segmentation: strong
+
+  - name: credential_policy
+    description: "Credentials: long-lived broad vs scoped, rotatable, least-privilege"
+    level0_label: broad_creds
+    level1_label: scoped_creds
+    level0_overrides:
+      credential_scope: broad
+      credential_rotation: false
+    level1_overrides:
+      credential_scope: scoped
+      credential_rotation: true
+      rotation_interval_days: 5
+
+  - name: communication_discipline
+    description: "Communication: free-form vs typed delegation with clarification gate"
+    level0_label: free_comms
+    level1_label: typed_comms
+    level0_overrides:
+      communication_discipline: free
+      clarification_gate: false
+    level1_overrides:
+      communication_discipline: typed
+      clarification_gate: true
+
+  - name: budget_control
+    description: "Budget policy: no cap vs hard spend cap with downgrade"
+    level0_label: no_cap
+    level1_label: spend_cap
+    level0_overrides:
+      spend_cap_enabled: false
+    level1_overrides:
+      spend_cap_enabled: true
+      spend_cap_per_day: 300.0
+      spend_cap_action: downgrade
+
+  - name: recovery_controls
+    description: "Recovery: passive logging only vs quarantine, trust decay, and key rotation"
+    level0_label: passive
+    level1_label: active_recovery
+    level0_overrides:
+      recovery_quarantine: false
+      recovery_trust_decay: false
+      recovery_key_rotation: false
+    level1_overrides:
+      recovery_quarantine: true
+      recovery_trust_decay: true
+      trust_decay_rate: 0.15
+      recovery_key_rotation: true
