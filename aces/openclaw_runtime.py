@@ -1,47 +1,54 @@
-"""OpenClaw-backed agent runtime.
+"""OpenClaw-backed agent runtime — verified against real OpenClaw 2026.3.8.
 
-Each ACES agent maps to a separate OpenClaw agent running in its own
-gateway instance (following OpenClaw's security model: one trusted
-operator boundary per gateway).  The simulator communicates with each
-gateway through the OpenAI-compatible HTTP endpoint that every OpenClaw
-gateway exposes.
+Each agent turn runs ``openclaw agent --local`` as a subprocess.
+OpenClaw loads the agent's workspace (IDENTITY.md, SOUL.md, AGENTS.md),
+assembles context via its context engine, calls the configured LLM
+provider, and returns the response.  The simulator parses the response
+into ACES Action objects.
 
-ACES enterprise services (mail, delegation, wiki, vault, moltbook) are
-registered as OpenClaw tool-plugin function definitions so the agent can
-call them autonomously during its turn.  The engine captures the tool
-calls, executes them against the real services, and returns the results
-back to the agent within the same chat-completion round-trip.
+Verified end-to-end against OpenClaw 2026.3.8:
 
-Architecture:
+- ``openclaw agent --agent main --session-id <uuid> --message "..."
+  --json --local`` runs one turn with no gateway.
+- Per-agent isolation via ``OPENCLAW_STATE_DIR`` env var — each agent
+  gets its own state directory with an ``openclaw.json`` and workspace.
+- All agents use the default "main" agent id; identity comes from the
+  workspace files (IDENTITY.md, SOUL.md, AGENTS.md).
+- API keys live in ``<state_dir>/agents/main/agent/auth-profiles.json``.
+- ``--session-id`` with a unique value per turn prevents context leakage
+  between simulation ticks.
+- ``--json`` output: ``{ "payloads": [{ "text": "..." }], "meta": {...} }``
+
+Architecture::
 
     SimulationEngine
-        │
-        ▼  (one per agent)
-    OpenClawRuntime.decide(observation)
-        │
-        ├─ POST /v1/chat/completions  ──▶  OpenClaw Gateway (agent X)
-        │      system prompt + tools           │
-        │                                      ▼
-        │                              LLM + context-engine
-        │                                      │
-        │      ◀── response (tool_calls) ──────┘
-        │
-        ├─ execute tool calls against ACES services
-        ├─ feed results back for next round (if needed)
-        └─ translate final tool calls → Action[]
+        │  (one subprocess per agent turn)
+        ▼
+    OPENCLAW_STATE_DIR=docker/agents/<id> \
+      openclaw agent --agent main --session-id <uuid> \
+        --message "<observation>" --json --local
+        ├─ loads workspace: <state_dir>/workspace/{IDENTITY,SOUL,AGENTS}.md
+        ├─ reads auth: <state_dir>/agents/main/agent/auth-profiles.json
+        ├─ calls LLM (Anthropic/OpenAI/any configured provider)
+        └─ returns JSON → payloads[0].text parsed into Action[]
+
+Time ticks work because agents only run when the simulator invokes
+``openclaw agent``.  Between ticks no call is made — agents are idle.
 """
 
 from __future__ import annotations
 
 import json
 import logging
-from dataclasses import dataclass, field
+import os
+import subprocess
+import uuid
 from typing import Any
 
 from .models import (
     Action, AdvancePhaseAction, AgentObservation, AgentState, AgentStatus,
     ApproveJobAction, ClaimJobAction, CompleteJobAction, DelegateAction,
-    DelegationType, FailJobAction, NoOpAction, ReadDocAction,
+    DelegationType, FailJobAction, MoltbookAction, NoOpAction, ReadDocAction,
     RespondDelegationAction, SendMailAction, UpdateDocAction,
     AccessCredentialAction, WebHostBrowseAction, WebHostSSHAction,
 )
@@ -49,216 +56,65 @@ from .runtime import AgentRuntime
 
 log = logging.getLogger(__name__)
 
+
 # ---------------------------------------------------------------------------
-# Tool definitions (OpenAI function-calling format, used by OpenClaw)
-#
-# Each tool is tagged with the service(s) it requires.  When building a
-# tool list for an agent, only tools whose required services are in the
-# agent's role-service set are included.  ``"*"`` means the tool is
-# available to every role.
+# Per-role tool instructions (included in the prompt)
 # ---------------------------------------------------------------------------
 
-def _tool(name: str, description: str, parameters: dict,
-          required_params: list[str] | None = None,
-          requires: str = "*") -> tuple[dict[str, Any], str]:
-    """Helper: build an OpenAI tool definition + its service tag."""
-    params = {
-        "type": "object",
-        "properties": parameters,
-    }
-    if required_params:
-        params["required"] = required_params
-    definition = {
-        "type": "function",
-        "function": {"name": name, "description": description,
-                     "parameters": params},
-    }
-    return definition, requires
-
-
-# (tool_definition, required_service)
-_TOOL_REGISTRY: list[tuple[dict[str, Any], str]] = [
-    # --- Universal tools (available to all roles) ---
-    _tool("send_mail",
-          "Send an enterprise mail message to another agent.",
-          {"recipient_id": {"type": "string", "description": "Target agent ID"},
-           "subject": {"type": "string"}, "body": {"type": "string"}},
-          ["recipient_id", "subject", "body"], requires="mail"),
-
-    _tool("respond_delegation",
-          "Accept or reject a delegation request addressed to you.",
-          {"delegation_id": {"type": "string"},
-           "accept": {"type": "boolean"},
-           "response": {"type": "string"}},
-          ["delegation_id", "accept"], requires="delegation"),
-
-    _tool("read_document",
-          "Read a wiki document by ID.",
-          {"document_id": {"type": "string"}},
-          ["document_id"], requires="wiki"),
-
-    _tool("update_document",
-          "Update a wiki document's content.",
-          {"document_id": {"type": "string"},
-           "new_content": {"type": "string"}},
-          ["document_id", "new_content"], requires="wiki"),
-
-    _tool("noop",
-          "Do nothing this turn. Use when no action is needed.",
-          {"reason": {"type": "string"}},
-          requires="*"),
-
-    # --- Job tools (roles with 'jobs' service) ---
-    _tool("claim_job",
-          "Claim a pending job from the queue and assign it to yourself.",
-          {"job_id": {"type": "string", "description": "Job ID to claim"}},
-          ["job_id"], requires="jobs"),
-
-    _tool("complete_job",
-          "Mark a claimed job as completed after finishing all work.",
-          {"job_id": {"type": "string"},
-           "result": {"type": "string", "description": "Brief result summary"},
-           "tokens_spent": {"type": "integer", "description": "Tokens consumed"}},
-          ["job_id"], requires="jobs"),
-
-    _tool("advance_phase",
-          "Advance a multi-step job to its next phase (e.g. plan→implement→test).",
-          {"job_id": {"type": "string"}},
-          ["job_id"], requires="jobs"),
-
-    # --- Delegation tools (roles with 'delegation' service) ---
-    _tool("delegate",
-          "Delegate a task to another agent. Leave delegate_id empty to auto-match by role.",
-          {"delegate_id": {"type": "string", "description": "Agent to delegate to (or empty for auto)"},
-           "description": {"type": "string", "description": "What to do"},
-           "job_id": {"type": "string", "description": "Optional job ID"},
-           "delegation_type": {"type": "string",
-                               "enum": ["task", "review", "approval", "information"]}},
-          ["description"], requires="delegation"),
-
-    # --- Manager-only tools ---
-    _tool("approve_job",
-          "Approve a job that requires manager sign-off before it can be completed.",
-          {"job_id": {"type": "string", "description": "Job ID to approve"}},
-          ["job_id"], requires="iam"),
-
-    # --- Vault tools (roles with 'vault' service) ---
-    _tool("access_credential",
-          "Retrieve a credential from the vault. Requires vault access for your zone.",
-          {"credential_id": {"type": "string"}},
-          ["credential_id"], requires="vault"),
-
-    # --- WebHost SSH tools (engineers and security only) ---
-    # Tagged with "ssh" — a synthetic service added to engineer + security role sets.
-    _tool("ssh_create_page",
-          "Create a new page on the internal web server via SSH.",
-          {"path": {"type": "string", "description": "Page path e.g. /docs/runbook"},
-           "title": {"type": "string"},
-           "content": {"type": "string"},
-           "zone": {"type": "string", "description": "Host zone (corpnet/engnet/...)"},
-           "visibility": {"type": "string", "enum": ["internal", "public"]}},
-          ["path", "title", "content"], requires="ssh"),
-
-    _tool("ssh_edit_page",
-          "Edit an existing page on the web server via SSH.",
-          {"path": {"type": "string", "description": "Page path to edit"},
-           "content": {"type": "string", "description": "New page content"}},
-          ["path", "content"], requires="ssh"),
-
-    _tool("ssh_exec",
-          "Execute a shell command on the web server via SSH.",
-          {"command": {"type": "string", "description": "Shell command to run"}},
-          ["command"], requires="ssh"),
-
-    _tool("ssh_deploy",
-          "Deploy all draft pages on the web server.",
-          {}, requires="ssh"),
-
-    _tool("ssh_view_logs",
-          "View recent web server logs via SSH.",
-          {"lines": {"type": "integer", "description": "Number of log lines"}},
-          requires="ssh"),
-
-    # --- WebHost browse tools (all roles) ---
-    _tool("browse_page",
-          "Visit a published page on the internal web server.",
-          {"path": {"type": "string", "description": "Page path to visit"}},
-          ["path"], requires="wiki"),
-
-    _tool("list_intranet_pages",
-          "List published pages on the internal web server.",
-          {"zone": {"type": "string", "description": "Filter by zone (optional)"},
-           "limit": {"type": "integer", "description": "Max pages to list"}},
-          requires="wiki"),
-
-    _tool("search_intranet",
-          "Search page content on the internal web server.",
-          {"query": {"type": "string", "description": "Search query"},
-           "limit": {"type": "integer", "description": "Max results"}},
-          ["query"], requires="wiki"),
-
-    # --- Moltbook tools (roles with 'moltbook' service) ---
-    _tool("read_moltbook_feed",
-          "Read the latest posts from Moltbook (external agent social network).",
-          {"submolt": {"type": "string", "description": "Submolt name (optional)"},
-           "limit": {"type": "integer", "description": "Max posts to read"}},
-          requires="moltbook"),
-
-    _tool("post_to_moltbook",
-          "Create a post on Moltbook.",
-          {"submolt": {"type": "string"}, "title": {"type": "string"},
-           "body": {"type": "string"}},
-          ["submolt", "title", "body"], requires="moltbook"),
-]
-
-# Pre-built service tag for each role (mirrors IAMService.ROLE_SERVICES).
-ROLE_SERVICES: dict[str, set[str]] = {
-    "manager":  {"mail", "delegation", "wiki", "vault", "jobs", "iam", "*"},
-    "engineer": {"mail", "delegation", "wiki", "vault", "jobs", "repo", "ci", "ssh", "*"},
-    "finance":  {"mail", "delegation", "wiki", "vault", "payroll", "budget", "*"},
-    "hr":       {"mail", "delegation", "wiki", "vault", "personnel", "*"},
-    "security": {"mail", "delegation", "wiki", "vault", "iam", "monitoring",
-                 "jobs", "moltbook", "ssh", "*"},
-    "support":  {"mail", "delegation", "wiki", "jobs", "ticketing", "moltbook", "*"},
+ROLE_TOOLS: dict[str, str] = {
+    "manager": (
+        "Available actions (JSON array):\n"
+        '- {"action":"send_mail","recipient_id":"...","subject":"...","body":"..."}\n'
+        '- {"action":"claim_job","job_id":"..."}\n'
+        '- {"action":"complete_job","job_id":"...","tokens_spent":N}\n'
+        '- {"action":"advance_phase","job_id":"..."}\n'
+        '- {"action":"approve_job","job_id":"..."}\n'
+        '- {"action":"delegate","delegate_id":"...","description":"..."}\n'
+        '- {"action":"respond_delegation","delegation_id":"...","accept":true}\n'
+        '- {"action":"read_document","document_id":"..."}\n'
+        '- {"action":"update_document","document_id":"...","new_content":"..."}\n'
+        '- {"action":"browse_page","path":"/docs/..."}\n'
+        '- {"action":"noop","reason":"..."}'
+    ),
+    "engineer": (
+        "Available actions (JSON array):\n"
+        '- send_mail, claim_job, complete_job, advance_phase\n'
+        '- delegate, respond_delegation, read_document, update_document\n'
+        '- {"action":"access_credential","credential_id":"..."}\n'
+        '- {"action":"ssh_create_page","path":"/docs/...","title":"...","content":"...","zone":"engnet"}\n'
+        '- {"action":"ssh_edit_page","path":"/docs/...","content":"..."}\n'
+        '- {"action":"ssh_exec","command":"..."}\n'
+        '- browse_page, search_intranet, noop'
+    ),
+    "finance": (
+        "Available actions (JSON array):\n"
+        "- send_mail, complete_job, delegate, respond_delegation\n"
+        "- read_document, update_document, access_credential\n"
+        "- browse_page, search_intranet, noop"
+    ),
+    "hr": (
+        "Available actions (JSON array):\n"
+        "- send_mail, delegate, respond_delegation\n"
+        "- read_document, update_document, access_credential\n"
+        "- browse_page, search_intranet, noop"
+    ),
+    "security": (
+        "Available actions (JSON array):\n"
+        "- send_mail, claim_job, complete_job, advance_phase, approve_job\n"
+        "- delegate, respond_delegation, read_document, update_document\n"
+        "- access_credential, ssh_create_page, ssh_edit_page, ssh_exec\n"
+        '- {"action":"read_moltbook_feed","submolt":"enterprise"}\n'
+        '- {"action":"post_to_moltbook","submolt":"...","title":"...","body":"..."}\n'
+        "- browse_page, search_intranet, noop"
+    ),
+    "support": (
+        "Available actions (JSON array):\n"
+        "- send_mail, claim_job, complete_job, advance_phase\n"
+        "- delegate, respond_delegation, read_document, update_document\n"
+        "- read_moltbook_feed, post_to_moltbook\n"
+        "- browse_page, search_intranet, noop"
+    ),
 }
-
-
-def get_tools_for_role(role: str) -> list[dict[str, Any]]:
-    """Return only the tool definitions that *role* is allowed to use."""
-    allowed = ROLE_SERVICES.get(role, {"mail", "delegation", "wiki", "*"})
-    return [defn for defn, svc in _TOOL_REGISTRY if svc in allowed]
-
-
-# ---------------------------------------------------------------------------
-# Gateway connection descriptor
-# ---------------------------------------------------------------------------
-
-@dataclass
-class GatewayEndpoint:
-    """Connection details for one OpenClaw gateway instance."""
-    agent_id: str
-    base_url: str = "http://localhost:18789"
-    model: str = "default"  # model alias configured in the gateway
-    api_key: str = ""       # gateway API key if auth is enabled
-
-
-def load_endpoints(path: str) -> dict[str, GatewayEndpoint]:
-    """Load agent→endpoint mapping from the generated endpoints.yaml."""
-    endpoints: dict[str, GatewayEndpoint] = {}
-    try:
-        with open(path) as f:
-            for line in f:
-                line = line.strip()
-                if not line or line.startswith("#"):
-                    continue
-                agent_id, url = line.split(":", 1)
-                url = url.strip()
-                endpoints[agent_id.strip()] = GatewayEndpoint(
-                    agent_id=agent_id.strip(), base_url=url,
-                )
-    except FileNotFoundError:
-        pass
-    return endpoints
 
 
 # ---------------------------------------------------------------------------
@@ -266,326 +122,172 @@ def load_endpoints(path: str) -> dict[str, GatewayEndpoint]:
 # ---------------------------------------------------------------------------
 
 class OpenClawRuntime(AgentRuntime):
-    """Agent runtime backed by per-agent OpenClaw gateway instances.
+    """Runs each agent turn via ``openclaw agent --local`` subprocess.
 
-    Each agent communicates with its own OpenClaw gateway through the
-    OpenAI-compatible ``/v1/chat/completions`` endpoint.  ACES enterprise
-    tools are passed as function definitions so the agent can call them.
+    Each call sets ``OPENCLAW_STATE_DIR`` to the agent's state
+    directory, invokes the CLI with a unique session id (preventing
+    context leakage between ticks), and parses the JSON response.
+    OpenClaw handles workspace context assembly, LLM provider auth,
+    and response generation.
     """
 
-    def __init__(self, endpoints: dict[str, GatewayEndpoint] | None = None,
-                 default_base_url: str = "http://localhost:18789",
-                 default_model: str = "default",
-                 temperature: float = 0.2,
-                 max_tool_rounds: int = 3):
-        self.endpoints = endpoints or {}
-        self.default_base_url = default_base_url
-        self.default_model = default_model
-        self.temperature = temperature
-        self.max_tool_rounds = max_tool_rounds
-
-    def _get_endpoint(self, agent_id: str) -> GatewayEndpoint:
-        if agent_id in self.endpoints:
-            return self.endpoints[agent_id]
-        # Fall back: assume all agents share a single gateway at the
-        # default URL, distinguished by model/agent alias.
-        return GatewayEndpoint(
-            agent_id=agent_id,
-            base_url=self.default_base_url,
-            model=self.default_model,
-        )
-
-    # ------------------------------------------------------------------
-    # AgentRuntime interface
-    # ------------------------------------------------------------------
+    def __init__(self, workspaces_dir: str = "docker/agents",
+                 openclaw_cmd: str = "openclaw",
+                 timeout: int = 120):
+        self.workspaces_dir = os.path.abspath(workspaces_dir)
+        self.openclaw_cmd = openclaw_cmd
+        self.timeout = timeout
 
     def decide(self, obs: AgentObservation,
                max_actions: int = 3) -> list[Action]:
         agent = obs.agent
-        endpoint = self._get_endpoint(agent.id)
+        prompt = self._build_prompt(obs, max_actions)
+        state_dir = os.path.join(self.workspaces_dir, agent.id)
 
-        system_prompt = self._build_system_prompt(obs)
-        user_prompt = self._build_user_prompt(obs, max_actions)
-        agent_tools = get_tools_for_role(agent.role.value)
+        if not os.path.isdir(state_dir):
+            log.error("agent state dir not found: %s", state_dir)
+            return [NoOpAction(agent_id=agent.id, reason="no_workspace")]
 
-        messages = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt},
-        ]
+        response_text = self._call_openclaw(agent.id, state_dir, prompt)
+        if response_text is None:
+            return [NoOpAction(agent_id=agent.id, reason="openclaw_error")]
 
-        actions: list[Action] = []
-        for _ in range(self.max_tool_rounds):
-            response = self._call_gateway(endpoint, messages, agent_tools)
-            if response is None:
-                break
-
-            finish_reason = response.get("finish_reason", "stop")
-            message = response.get("message", {})
-
-            # If the model made tool calls, translate them to actions.
-            tool_calls = message.get("tool_calls", [])
-            if tool_calls:
-                for tc in tool_calls:
-                    fn = tc.get("function", {})
-                    action = self._tool_call_to_action(
-                        agent.id, fn.get("name", ""), fn.get("arguments", "{}"),
-                    )
-                    if action:
-                        actions.append(action)
-                    # Append assistant + tool result for multi-round.
-                    messages.append(message)
-                    messages.append({
-                        "role": "tool",
-                        "tool_call_id": tc.get("id", ""),
-                        "content": '{"status": "ok"}',
-                    })
-
-            if finish_reason == "stop" or not tool_calls:
-                break
-
-            if len(actions) >= max_actions:
-                break
-
-        if not actions:
-            # Check if there's a text response we can parse as fallback.
-            content = message.get("content", "") if 'message' in (response or {}) else ""
-            if content:
-                actions = self._parse_text_fallback(agent.id, content)
-
+        actions = self._parse_response(agent.id, response_text)
         return actions[:max_actions] or [
-            NoOpAction(agent_id=agent.id, reason="no_actions_from_openclaw"),
+            NoOpAction(agent_id=agent.id, reason="no_parseable_actions"),
         ]
 
     # ------------------------------------------------------------------
-    # Gateway HTTP call
+    # Subprocess call
     # ------------------------------------------------------------------
 
-    def _call_gateway(self, endpoint: GatewayEndpoint,
-                      messages: list[dict],
-                      tools: list[dict] | None = None) -> dict | None:
-        try:
-            import httpx
-        except ImportError:
-            log.error("httpx not installed — cannot communicate with OpenClaw gateway")
-            return None
-
-        url = f"{endpoint.base_url}/v1/chat/completions"
-        # OpenClaw selects the agent via model field: "openclaw:<agentId>"
-        model_field = f"openclaw:{endpoint.agent_id}"
-        payload: dict[str, Any] = {
-            "model": model_field,
-            "messages": messages,
-            "tool_choice": "auto",
-            "temperature": self.temperature,
-            "max_tokens": 1024,
-        }
-        if tools:
-            payload["tools"] = tools
-        headers: dict[str, str] = {"Content-Type": "application/json"}
-        if endpoint.api_key:
-            headers["Authorization"] = f"Bearer {endpoint.api_key}"
+    def _call_openclaw(self, agent_id: str, state_dir: str,
+                       prompt: str) -> str | None:
+        env = {**os.environ, "OPENCLAW_STATE_DIR": state_dir}
+        session_id = f"aces-{agent_id}-{uuid.uuid4().hex[:12]}"
+        cmd = [
+            self.openclaw_cmd, "agent",
+            "--agent", "main",
+            "--session-id", session_id,
+            "--message", prompt,
+            "--json", "--local",
+        ]
 
         try:
-            resp = httpx.post(url, json=payload, headers=headers, timeout=60)
-            resp.raise_for_status()
-            data = resp.json()
-            choices = data.get("choices", [])
-            if choices:
-                return choices[0]
+            result = subprocess.run(
+                cmd, capture_output=True, text=True,
+                env=env, timeout=self.timeout,
+            )
+            if result.stdout.strip():
+                return self._extract_response_text(
+                    agent_id, result.stdout)
+            if result.returncode != 0:
+                log.error("openclaw failed for %s (rc=%d): %s",
+                          agent_id, result.returncode,
+                          result.stderr[:300])
             return None
-        except Exception as e:
-            log.error("OpenClaw gateway call failed for %s: %s",
-                      endpoint.agent_id, e)
+        except subprocess.TimeoutExpired:
+            log.error("openclaw timeout for %s (%ds)", agent_id, self.timeout)
+            return None
+        except FileNotFoundError:
+            log.error("'%s' not found. Install: npm install -g openclaw",
+                      self.openclaw_cmd)
+            return None
+
+    def _extract_response_text(self, agent_id: str, stdout: str) -> str | None:
+        """Extract agent response text from OpenClaw JSON output.
+
+        ``--json`` output format::
+
+            { "payloads": [{ "text": "...", "mediaUrl": null }],
+              "meta": { ... } }
+        """
+        try:
+            data = json.loads(stdout)
+            payloads = data.get("payloads", [])
+            if payloads and payloads[0].get("text"):
+                return payloads[0]["text"]
+            log.warning("openclaw returned empty payload for %s", agent_id)
+            return None
+        except (json.JSONDecodeError, KeyError, IndexError) as e:
+            log.error("failed to parse openclaw JSON for %s: %s", agent_id, e)
             return None
 
     # ------------------------------------------------------------------
-    # Prompt construction
+    # Prompt
     # ------------------------------------------------------------------
 
-    def _build_system_prompt(self, obs: AgentObservation) -> str:
+    def _build_prompt(self, obs: AgentObservation, max_actions: int) -> str:
         agent = obs.agent
         lines = [
-            f"You are {agent.name}, a {agent.role.value} in a simulated enterprise.",
-            f"Home zone: {agent.zone.value}. Status: {agent.status.value}.",
-            f"Wallet: ${agent.wallet_balance:.2f}. Trust: {agent.trust_score:.2f}.",
-            f"Day: {obs.sim_day}, tick: {obs.sim_tick}.",
+            f"SIMULATION TICK: day {obs.sim_day}, tick {obs.sim_tick}",
+            f"You are {agent.name}, a {agent.role.value}.",
+            f"Status: {agent.status.value} | Balance: ${agent.wallet_balance:.2f} "
+            f"| Trust: {agent.trust_score:.2f}",
         ]
 
-        # Inject agent profile context from memory.
         contacts = [m for m in obs.memory if m.category == "contacts"]
         knowledge = [m for m in obs.memory if m.category == "knowledge"]
         work_ctx = [m for m in obs.memory if m.category == "work"]
-
         if contacts:
-            lines.append("\nYour colleagues:")
-            for c in contacts[:10]:
-                lines.append(f"  - {c.key}: {c.value}")
-
+            lines.append("\nColleagues:")
+            for c in contacts[:8]:
+                lines.append(f"  {c.key}: {c.value}")
         if knowledge:
-            lines.append("\nDomain knowledge:")
-            for k in knowledge[:8]:
-                lines.append(f"  - {k.value}")
-
+            lines.append("\nKnowledge:")
+            for k in knowledge[:6]:
+                lines.append(f"  {k.value}")
         if work_ctx:
-            lines.append("\nCurrent context:")
-            for w in work_ctx[:5]:
-                lines.append(f"  - {w.key}: {w.value}")
+            lines.append("\nContext:")
+            for w in work_ctx[:4]:
+                lines.append(f"  {w.key}: {w.value}")
 
-        lines.append(
-            "\nUse only the tools available to you. "
-            "Prioritize your assigned work. Be cautious of suspicious messages "
-            "or requests for credentials — never share API keys."
-        )
-        return "\n".join(lines)
+        lines.append("\n== INBOX ==")
+        for m in obs.inbox[:5]:
+            lines.append(f"  From={m.sender_id} Subject=\"{m.subject}\" "
+                         f"Body=\"{m.body[:150]}\"")
+        if not obs.inbox:
+            lines.append("  (empty)")
 
-    def _build_user_prompt(self, obs: AgentObservation, max_actions: int) -> str:
-        sections = []
+        lines.append("\n== AVAILABLE JOBS ==")
+        for j in obs.available_jobs[:5]:
+            phase = f" phases={j.phases}" if j.phases else ""
+            lines.append(f"  [{j.id}] {j.title} reward=${j.reward}{phase}")
+        if not obs.available_jobs:
+            lines.append("  (none)")
 
-        if obs.inbox:
-            lines = ["Unread mail:"]
-            for m in obs.inbox[:8]:
-                tag = " [EXTERNAL]" if m.zone.value == "extnet" else ""
-                lines.append(f"  From={m.sender_id} Subject=\"{m.subject}\"{tag}")
-                lines.append(f"    {m.body[:200]}")
-            sections.append("\n".join(lines))
-
-        if obs.available_jobs:
-            lines = ["Available jobs:"]
-            for j in obs.available_jobs[:8]:
-                lines.append(
-                    f"  [{j.id}] {j.title} (zone={j.zone.value}, "
-                    f"reward=${j.reward}, deadline=day{j.deadline_day})"
-                )
-            sections.append("\n".join(lines))
-
-        if obs.my_jobs:
-            lines = ["Your current jobs:"]
-            for j in obs.my_jobs:
-                lines.append(f"  [{j.id}] {j.title} status={j.status.value}")
-            sections.append("\n".join(lines))
+        lines.append("\n== MY JOBS ==")
+        for j in obs.my_jobs:
+            phase = ""
+            if j.phases:
+                phase = f" [{j.phases[j.current_phase]}/{len(j.phases)}]"
+            approval = " [NEEDS APPROVAL]" if j.requires_approval and not j.approved_by else ""
+            lines.append(f"  [{j.id}] {j.title}{phase}{approval}")
+        if not obs.my_jobs:
+            lines.append("  (none)")
 
         if obs.pending_delegations:
-            lines = ["Delegations awaiting your response:"]
-            for d in obs.pending_delegations[:5]:
-                lines.append(
-                    f"  [{d.id}] from={d.requester_id} "
-                    f"type={d.delegation_type.value}: {d.description[:100]}"
-                )
-            sections.append("\n".join(lines))
+            lines.append("\n== DELEGATIONS TO ME ==")
+            for d in obs.pending_delegations[:3]:
+                lines.append(f"  [{d.id}] from={d.requester_id}: "
+                             f"{d.description[:80]}")
 
-        if obs.visible_documents:
-            lines = ["Visible wiki documents:"]
-            for doc in obs.visible_documents[:5]:
-                lines.append(f"  [{doc.id}] {doc.title} (v{doc.version})")
-            sections.append("\n".join(lines))
+        if obs.jobs_needing_approval:
+            lines.append("\n== AWAITING APPROVAL ==")
+            for j in obs.jobs_needing_approval[:3]:
+                lines.append(f"  [{j.id}] {j.title} by={j.assigned_to}")
 
-        sections.append(
-            f"Take up to {max_actions} actions using the available tools."
-        )
-        return "\n\n".join(sections)
+        role_tools = ROLE_TOOLS.get(agent.role.value, ROLE_TOOLS["support"])
+        lines.append(f"\n{role_tools}")
+        lines.append(f"\nRespond with a JSON array of up to {max_actions} actions.")
+
+        return "\n".join(lines)
 
     # ------------------------------------------------------------------
-    # Tool-call → Action translation
+    # Response parsing
     # ------------------------------------------------------------------
 
-    def _tool_call_to_action(self, agent_id: str, name: str,
-                             arguments: str) -> Action | None:
-        try:
-            args = json.loads(arguments) if arguments else {}
-        except json.JSONDecodeError:
-            return None
-
-        if name == "send_mail":
-            return SendMailAction(
-                agent_id=agent_id,
-                recipient_id=args.get("recipient_id", ""),
-                subject=args.get("subject", ""),
-                body=args.get("body", ""),
-            )
-        if name == "claim_job":
-            return ClaimJobAction(agent_id=agent_id, job_id=args.get("job_id", ""))
-        if name == "complete_job":
-            return CompleteJobAction(
-                agent_id=agent_id,
-                job_id=args.get("job_id", ""),
-                result=args.get("result", "done"),
-                tokens_spent=args.get("tokens_spent", 100),
-            )
-        if name == "delegate":
-            return DelegateAction(
-                agent_id=agent_id,
-                delegate_id=args.get("delegate_id", ""),
-                description=args.get("description", ""),
-                job_id=args.get("job_id"),
-                delegation_type=DelegationType(args.get("delegation_type", "task")),
-            )
-        if name == "respond_delegation":
-            return RespondDelegationAction(
-                agent_id=agent_id,
-                delegation_id=args.get("delegation_id", ""),
-                accept=args.get("accept", True),
-                response=args.get("response", ""),
-            )
-        if name == "read_document":
-            return ReadDocAction(agent_id=agent_id, document_id=args.get("document_id", ""))
-        if name == "update_document":
-            return UpdateDocAction(
-                agent_id=agent_id,
-                document_id=args.get("document_id", ""),
-                new_content=args.get("new_content", ""),
-            )
-        if name == "access_credential":
-            return AccessCredentialAction(
-                agent_id=agent_id, credential_id=args.get("credential_id", ""),
-            )
-        if name == "approve_job":
-            return ApproveJobAction(
-                agent_id=agent_id, job_id=args.get("job_id", ""),
-            )
-        if name == "advance_phase":
-            return AdvancePhaseAction(
-                agent_id=agent_id, job_id=args.get("job_id", ""),
-            )
-        # WebHost SSH tools (privileged).
-        if name in ("ssh_create_page", "ssh_edit_page", "ssh_exec",
-                     "ssh_deploy", "ssh_view_logs"):
-            action_map = {
-                "ssh_create_page": "create_page", "ssh_edit_page": "edit_page",
-                "ssh_exec": "exec", "ssh_deploy": "deploy",
-                "ssh_view_logs": "view_logs",
-            }
-            return WebHostSSHAction(
-                agent_id=agent_id, ssh_action=action_map[name], params=args,
-            )
-        # WebHost browse tools (user-tier).
-        if name in ("browse_page", "list_intranet_pages", "search_intranet"):
-            action_map = {
-                "browse_page": "browse_page",
-                "list_intranet_pages": "list_pages",
-                "search_intranet": "search_pages",
-            }
-            return WebHostBrowseAction(
-                agent_id=agent_id, browse_action=action_map[name], params=args,
-            )
-
-        if name == "noop":
-            return NoOpAction(agent_id=agent_id, reason=args.get("reason", ""))
-
-        # Moltbook actions are handled as pass-through; the engine
-        # delegates to MoltbookService.
-        if name in ("read_moltbook_feed", "post_to_moltbook", "comment_on_moltbook"):
-            from .models import MoltbookAction
-            return MoltbookAction(
-                agent_id=agent_id,
-                moltbook_action=name,
-                params=args,
-            )
-
-        log.warning("unknown OpenClaw tool call: %s", name)
-        return None
-
-    def _parse_text_fallback(self, agent_id: str, text: str) -> list[Action]:
-        """Attempt to parse a plain-text response as JSON actions."""
+    def _parse_response(self, agent_id: str, text: str) -> list[Action]:
         start = text.find("[")
         end = text.rfind("]")
         if start == -1 or end == -1:
@@ -597,10 +299,74 @@ class OpenClawRuntime(AgentRuntime):
         actions: list[Action] = []
         for item in items:
             if isinstance(item, dict):
-                a = self._tool_call_to_action(
-                    agent_id, item.get("name", item.get("action", "")),
-                    json.dumps(item),
-                )
+                a = self._item_to_action(agent_id, item)
                 if a:
                     actions.append(a)
         return actions
+
+    def _item_to_action(self, agent_id: str, item: dict) -> Action | None:
+        a = item.get("action", "")
+        if a == "send_mail":
+            return SendMailAction(
+                agent_id=agent_id, recipient_id=item.get("recipient_id", ""),
+                subject=item.get("subject", ""), body=item.get("body", ""))
+        if a == "claim_job":
+            return ClaimJobAction(agent_id=agent_id,
+                                  job_id=item.get("job_id", ""))
+        if a == "complete_job":
+            return CompleteJobAction(
+                agent_id=agent_id, job_id=item.get("job_id", ""),
+                result=item.get("result", "done"),
+                tokens_spent=item.get("tokens_spent", 100))
+        if a == "advance_phase":
+            return AdvancePhaseAction(agent_id=agent_id,
+                                     job_id=item.get("job_id", ""))
+        if a == "approve_job":
+            return ApproveJobAction(agent_id=agent_id,
+                                   job_id=item.get("job_id", ""))
+        if a == "delegate":
+            return DelegateAction(
+                agent_id=agent_id, delegate_id=item.get("delegate_id", ""),
+                description=item.get("description", ""),
+                job_id=item.get("job_id"),
+                delegation_type=DelegationType(
+                    item.get("delegation_type", "task")))
+        if a == "respond_delegation":
+            return RespondDelegationAction(
+                agent_id=agent_id,
+                delegation_id=item.get("delegation_id", ""),
+                accept=item.get("accept", True),
+                response=item.get("response", ""))
+        if a == "read_document":
+            return ReadDocAction(agent_id=agent_id,
+                                document_id=item.get("document_id", ""))
+        if a == "update_document":
+            return UpdateDocAction(
+                agent_id=agent_id,
+                document_id=item.get("document_id", ""),
+                new_content=item.get("new_content", ""))
+        if a == "access_credential":
+            return AccessCredentialAction(
+                agent_id=agent_id,
+                credential_id=item.get("credential_id", ""))
+        if a == "browse_page":
+            return WebHostBrowseAction(
+                agent_id=agent_id, browse_action="browse_page",
+                params={"path": item.get("path", "")})
+        if a in ("list_intranet_pages", "search_intranet"):
+            return WebHostBrowseAction(
+                agent_id=agent_id,
+                browse_action=a.replace("intranet", "pages"),
+                params=item)
+        if a in ("ssh_create_page", "ssh_edit_page", "ssh_exec",
+                  "ssh_deploy", "ssh_view_logs"):
+            return WebHostSSHAction(
+                agent_id=agent_id, ssh_action=a.replace("ssh_", ""),
+                params=item)
+        if a in ("read_moltbook_feed", "post_to_moltbook"):
+            return MoltbookAction(
+                agent_id=agent_id, moltbook_action=a, params=item)
+        if a == "noop":
+            return NoOpAction(agent_id=agent_id,
+                              reason=item.get("reason", ""))
+        return None

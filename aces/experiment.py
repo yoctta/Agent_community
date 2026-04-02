@@ -200,7 +200,7 @@ def run_single(cfg: ACESConfig, condition: Condition, seed: int,
     engine.services.moltbook = mb
 
     # Metrics.
-    mc = MetricsComputer(db)
+    mc = MetricsComputer(db, csri_weights=cfg.experiment.csri_weights)
     engine.metrics_computer = mc
 
     # Attacks.

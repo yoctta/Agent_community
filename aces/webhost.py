@@ -324,6 +324,19 @@ class WebHostService:
                     result.append(self._row_to_page(r))
         return result
 
+    # ------------------------------------------------------------------
+    # Engine adapter (called as svc.wiki.read / svc.wiki.update)
+    # ------------------------------------------------------------------
+
+    def read(self, agent: AgentState, path: str, **kw) -> WebPage | None:
+        """Alias for browse_page — used by engine ReadDocAction."""
+        return self.browse_page(agent, path, **kw)
+
+    def update(self, agent: AgentState, path: str, new_content: str,
+               **kw) -> bool:
+        """Alias for ssh_edit_page — used by engine UpdateDocAction."""
+        return self.ssh_edit_page(agent, path, new_content, **kw)
+
     def _row_to_page(self, r) -> WebPage:
         return WebPage(
             id=r["id"], path=r["path"], title=r["title"],

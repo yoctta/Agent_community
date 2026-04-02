@@ -188,6 +188,8 @@ class ExperimentConfig:
     early_stop_insolvency: bool = True
     insolvency_threshold: float = -1000.0
     early_stop_full_compromise: bool = True
+    # CSRI component weights: [confidentiality, availability, economic, spread].
+    csri_weights: list[float] = field(default_factory=lambda: [0.25, 0.25, 0.25, 0.25])
     # Baseline defense settings
     baseline_defenses: DefenseOverrides = field(default_factory=DefenseOverrides)
 

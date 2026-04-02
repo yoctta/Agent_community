@@ -52,8 +52,10 @@ class FinalMetrics:
 class MetricsComputer:
     """Computes per-day snapshots and final aggregate metrics."""
 
-    def __init__(self, db: Database):
+    def __init__(self, db: Database,
+                 csri_weights: list[float] | None = None):
         self.db = db
+        self.csri_weights = csri_weights or [0.25, 0.25, 0.25, 0.25]
 
     # ------------------------------------------------------------------
     # Per-day snapshot
@@ -233,7 +235,6 @@ class MetricsComputer:
         econ_loss = fm.twr
         spread = fm.blast_radius
 
-        # Equal weights by default.
-        weights = [0.25, 0.25, 0.25, 0.25]
+        weights = self.csri_weights
         values = [conf_norm, avail_loss, econ_loss, spread]
         return sum(w * v for w, v in zip(weights, values))

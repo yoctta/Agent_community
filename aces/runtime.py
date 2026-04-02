@@ -21,9 +21,11 @@ from typing import Any
 
 from .models import (
     Action, AgentObservation, AgentState,
+    AdvancePhaseAction, ApproveJobAction,
     ClaimJobAction, CompleteJobAction, DelegateAction, DelegationType,
-    FailJobAction, NoOpAction, ReadDocAction, RespondDelegationAction,
-    SendMailAction, UpdateDocAction,
+    FailJobAction, MoltbookAction, NoOpAction, ReadDocAction,
+    RespondDelegationAction, SendMailAction, UpdateDocAction,
+    AccessCredentialAction, WebHostBrowseAction, WebHostSSHAction,
 )
 
 log = logging.getLogger(__name__)
@@ -270,13 +272,50 @@ class LLMAgentRuntime(AgentRuntime):
                     accept=item.get("accept", True),
                     response=item.get("response", ""),
                 ))
+            elif a == "advance_phase":
+                actions.append(AdvancePhaseAction(
+                    agent_id=agent_id, job_id=item.get("job_id", "")))
+            elif a == "approve_job":
+                actions.append(ApproveJobAction(
+                    agent_id=agent_id, job_id=item.get("job_id", "")))
+            elif a == "fail_job":
+                actions.append(FailJobAction(
+                    agent_id=agent_id, job_id=item.get("job_id", ""),
+                    reason=item.get("reason", "")))
             elif a == "delegate":
                 actions.append(DelegateAction(
                     agent_id=agent_id,
                     delegate_id=item.get("delegate_id", ""),
                     description=item.get("description", ""),
-                    delegation_type=DelegationType.TASK,
+                    job_id=item.get("job_id"),
+                    delegation_type=DelegationType(
+                        item.get("delegation_type", "task")),
                 ))
+            elif a == "read_document":
+                actions.append(ReadDocAction(
+                    agent_id=agent_id,
+                    document_id=item.get("document_id", "")))
+            elif a == "update_document":
+                actions.append(UpdateDocAction(
+                    agent_id=agent_id,
+                    document_id=item.get("document_id", ""),
+                    new_content=item.get("new_content", "")))
+            elif a == "access_credential":
+                actions.append(AccessCredentialAction(
+                    agent_id=agent_id,
+                    credential_id=item.get("credential_id", "")))
+            elif a == "browse_page":
+                actions.append(WebHostBrowseAction(
+                    agent_id=agent_id, browse_action="browse_page",
+                    params={"path": item.get("path", "")}))
+            elif a in ("ssh_create_page", "ssh_edit_page", "ssh_exec",
+                        "ssh_deploy", "ssh_view_logs"):
+                actions.append(WebHostSSHAction(
+                    agent_id=agent_id, ssh_action=a.replace("ssh_", ""),
+                    params=item))
+            elif a in ("read_moltbook_feed", "post_to_moltbook"):
+                actions.append(MoltbookAction(
+                    agent_id=agent_id, moltbook_action=a, params=item))
             elif a == "noop":
                 actions.append(NoOpAction(agent_id=agent_id, reason=item.get("reason", "")))
         return actions
@@ -315,15 +354,9 @@ def create_runtime(backend: str = "openai", *,
       - Any other   — treated as OpenAI-compatible at the given base_url
     """
     if backend == "openclaw":
-        from .openclaw_runtime import OpenClawRuntime, load_endpoints
-        oc_url = base_url or kwargs.get("openclaw_base_url", "http://localhost:18789")
-        endpoints_file = kwargs.get("openclaw_endpoints", "docker/agents/endpoints.yaml")
-        endpoints = load_endpoints(endpoints_file)
-        return OpenClawRuntime(
-            endpoints=endpoints or None,
-            default_base_url=oc_url,
-            default_model=model or "default",
-        )
+        from .openclaw_runtime import OpenClawRuntime
+        workspaces = kwargs.get("openclaw_workspaces", "docker/agents")
+        return OpenClawRuntime(workspaces_dir=workspaces)
 
     default_url, api_style = PROVIDER_DEFAULTS.get(
         backend, (base_url or "https://api.openai.com", "openai"),

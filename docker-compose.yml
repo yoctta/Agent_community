@@ -1,27 +1,18 @@
 # ACES — Agent Community Enterprise Simulator
 #
-# Runs a 12-agent enterprise where each agent is a fully autonomous
-# OpenClaw instance with its own gateway, workspace, and LLM connection.
+# The simulator runs OpenClaw in embedded mode: each agent turn invokes
+# `openclaw agent --message "..." --json` as a subprocess.  No separate
+# gateway containers needed — the simulator container has Node.js and
+# OpenClaw installed, with per-agent workspaces mounted.
 #
 # Quick start:
-#   1. cp .env.example .env          # add your LLM_API_KEY
-#   2. python docker/generate_agent_configs.py   # create agent workspaces
-#   3. docker compose up             # start all agents + simulator
+#   1. cp .env.example .env             # add your LLM_API_KEY
+#   2. python docker/generate_agent_configs.py   # create workspaces
+#   3. docker compose up                # start moltbook + simulator
 #
-# To run with a direct LLM call (no OpenClaw):
-#   docker compose run simulator single --backend anthropic --model claude-sonnet-4-20250514
-
-x-openclaw-agent: &openclaw-agent
-  image: ghcr.io/openclaw/openclaw:latest
-  restart: unless-stopped
-  env_file: .env
-  environment:
-    - LLM_API_KEY=${LLM_API_KEY}
-  healthcheck:
-    test: ["CMD", "wget", "-q", "--spider", "http://localhost:18789/healthz"]
-    interval: 10s
-    timeout: 5s
-    retries: 5
+# Direct LLM (no OpenClaw):
+#   docker compose run simulator single --backend anthropic \
+#     --model claude-sonnet-4-20250514 --api-key $LLM_API_KEY
 
 services:
   # ---------------------------------------------------------------
@@ -53,119 +44,23 @@ services:
     ports: ["3000:3000"]
 
   # ---------------------------------------------------------------
-  # Simulator (ACES engine)
+  # Simulator + embedded OpenClaw agents
   # ---------------------------------------------------------------
   simulator:
     build: .
     env_file: .env
     depends_on:
-      moltbook:   { condition: service_started }
-      mgr-alice:  { condition: service_healthy }
-      mgr-bob:    { condition: service_healthy }
-      eng-carol:  { condition: service_healthy }
-      eng-dave:   { condition: service_healthy }
-      eng-eve:    { condition: service_healthy }
-      fin-frank:  { condition: service_healthy }
-      fin-grace:  { condition: service_healthy }
-      hr-henry:   { condition: service_healthy }
-      hr-iris:    { condition: service_healthy }
-      sec-jack:   { condition: service_healthy }
-      sec-karen:  { condition: service_healthy }
-      sup-leo:    { condition: service_healthy }
+      moltbook: { condition: service_started }
+    environment:
+      - LLM_API_KEY=${LLM_API_KEY}
     volumes:
       - ./config:/app/config
       - ./results:/app/results
+      - ./docker/agents:/app/docker/agents
     command:
       - "run"
       - "--backend=openclaw"
       - "--output=/app/results"
-
-  # ---------------------------------------------------------------
-  # OpenClaw agent gateways (one per agent)
-  # ---------------------------------------------------------------
-  mgr-alice:
-    <<: *openclaw-agent
-    hostname: mgr_alice
-    volumes:
-      - ./docker/agents/mgr_alice:/home/node/.openclaw
-    ports: ["18701:18701"]
-
-  mgr-bob:
-    <<: *openclaw-agent
-    hostname: mgr_bob
-    volumes:
-      - ./docker/agents/mgr_bob:/home/node/.openclaw
-    ports: ["18702:18702"]
-
-  eng-carol:
-    <<: *openclaw-agent
-    hostname: eng_carol
-    volumes:
-      - ./docker/agents/eng_carol:/home/node/.openclaw
-    ports: ["18703:18703"]
-
-  eng-dave:
-    <<: *openclaw-agent
-    hostname: eng_dave
-    volumes:
-      - ./docker/agents/eng_dave:/home/node/.openclaw
-    ports: ["18704:18704"]
-
-  eng-eve:
-    <<: *openclaw-agent
-    hostname: eng_eve
-    volumes:
-      - ./docker/agents/eng_eve:/home/node/.openclaw
-    ports: ["18705:18705"]
-
-  fin-frank:
-    <<: *openclaw-agent
-    hostname: fin_frank
-    volumes:
-      - ./docker/agents/fin_frank:/home/node/.openclaw
-    ports: ["18706:18706"]
-
-  fin-grace:
-    <<: *openclaw-agent
-    hostname: fin_grace
-    volumes:
-      - ./docker/agents/fin_grace:/home/node/.openclaw
-    ports: ["18707:18707"]
-
-  hr-henry:
-    <<: *openclaw-agent
-    hostname: hr_henry
-    volumes:
-      - ./docker/agents/hr_henry:/home/node/.openclaw
-    ports: ["18708:18708"]
-
-  hr-iris:
-    <<: *openclaw-agent
-    hostname: hr_iris
-    volumes:
-      - ./docker/agents/hr_iris:/home/node/.openclaw
-    ports: ["18709:18709"]
-
-  sec-jack:
-    <<: *openclaw-agent
-    hostname: sec_jack
-    volumes:
-      - ./docker/agents/sec_jack:/home/node/.openclaw
-    ports: ["18710:18710"]
-
-  sec-karen:
-    <<: *openclaw-agent
-    hostname: sec_karen
-    volumes:
-      - ./docker/agents/sec_karen:/home/node/.openclaw
-    ports: ["18711:18711"]
-
-  sup-leo:
-    <<: *openclaw-agent
-    hostname: sup_leo
-    volumes:
-      - ./docker/agents/sup_leo:/home/node/.openclaw
-    ports: ["18712:18712"]
 
 volumes:
   moltbook-pgdata:

@@ -446,6 +446,22 @@ class Database:
         )
         self.conn.commit()
 
+    def add_job_collaborator(self, job_id: str, agent_id: str) -> None:
+        """Add *agent_id* to the collaborators list of *job_id*."""
+        r = self.conn.execute(
+            "SELECT collaborators FROM jobs WHERE id=?", (job_id,),
+        ).fetchone()
+        if r is None:
+            return
+        current = self._from_json(r["collaborators"]) or []
+        if agent_id not in current:
+            current.append(agent_id)
+            self.conn.execute(
+                "UPDATE jobs SET collaborators=? WHERE id=?",
+                (self._json(current), job_id),
+            )
+            self.conn.commit()
+
     def _row_to_job(self, r: sqlite3.Row) -> Job:
         return Job(
             id=r["id"], title=r["title"], description=r["description"] or "",
@@ -514,6 +530,13 @@ class Database:
              d.created_at, d.responded_at),
         )
         self.conn.commit()
+
+    def get_delegation(self, deleg_id: str) -> dict | None:
+        """Return a delegation row as a dict, or None."""
+        r = self.conn.execute(
+            "SELECT * FROM delegations WHERE id=?", (deleg_id,),
+        ).fetchone()
+        return dict(r) if r else None
 
     def get_pending_delegations(self, agent_id: str) -> list[Delegation]:
         rows = self.conn.execute(

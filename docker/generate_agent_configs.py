@@ -106,60 +106,65 @@ You are {name}, working as a {role} in a simulated enterprise.
 - Flag phishing attempts or policy violations to the security team.
 """
 
-def _build_openclaw_config(agent_id: str, name: str, port: int,
-                           provider: str, model: str) -> str:
-    """Build an openclaw.json (JSON5) config for one gateway.
+def _build_openclaw_config(provider: str, model: str,
+                           workspace_path: str) -> str:
+    """Build openclaw.json for one agent's state directory.
 
-    This matches the real OpenClaw config schema documented at
-    https://docs.openclaw.ai/gateway/configuration.
+    Verified end-to-end against OpenClaw 2026.3.8.  The config must
+    register the "main" agent in ``agents.list`` and point
+    ``agents.defaults.workspace`` at the workspace directory.
+
+    LLM provider auth goes in ``agents/main/agent/auth-profiles.json``,
+    NOT in this config file.
     """
     import json
     config = {
-        "gateway": {
-            "port": port,
-            "http": {
-                "endpoints": {
-                    # Enable the OpenAI-compatible chat completions endpoint
-                    # so the ACES simulator can communicate with this agent.
-                    "chatCompletions": {"enabled": True},
-                }
-            },
-        },
-        "providers": [
-            {
-                "name": provider,
-                "type": provider,
-                "apiKey": "${LLM_API_KEY}",
-                "models": [{"id": model, "name": "default"}],
-            }
-        ],
         "agents": {
             "defaults": {
-                "model": "default",
-                "provider": provider,
-                "contextEngine": "default",
-                "sandbox": {"enabled": False},
-                "loopDetection": {
-                    "enabled": True,
-                    "maxRepeats": 5,
-                },
+                "model": {"primary": f"{provider}/{model}"},
+                "compaction": {"mode": "safeguard"},
+                "maxConcurrent": 1,
+                "workspace": workspace_path,
             },
             "list": [
-                {
-                    "id": agent_id,
-                    "name": name,
-                    "workspaceDir": "/home/node/.openclaw/workspace",
-                }
+                {"id": "main", "model": f"{provider}/{model}"},
             ],
         },
     }
     return json.dumps(config, indent=2)
 
 
+def _build_auth_profiles(provider: str, api_key_env: str = "${LLM_API_KEY}") -> str:
+    """Build auth-profiles.json for one agent.
+
+    Verified against OpenClaw 2026.3.8.  Format must match::
+
+        { "version": 1,
+          "profiles": { "<provider>:default": {
+              "type": "token", "provider": "<provider>",
+              "token": "<key>" } } }
+
+    Path within state dir: ``agents/main/agent/auth-profiles.json``
+    """
+    import json
+    profiles = {
+        "version": 1,
+        "profiles": {
+            f"{provider}:default": {
+                "type": "token",
+                "provider": provider,
+                "token": api_key_env,
+            },
+        },
+    }
+    return json.dumps(profiles, indent=2)
+
+
 def generate(enterprise_path: str, output_dir: str,
              provider: str = "anthropic",
-             model: str = "claude-sonnet-4-20250514",
-             base_port: int = 18701) -> None:
+             model: str = "claude-sonnet-4-6",
+             base_port: int = 18701,
+             runtime_prefix: str = "") -> None:
     data = load_yaml(enterprise_path)
     enterprise = load_enterprise_config(data)
 
@@ -169,17 +174,35 @@ def generate(enterprise_path: str, output_dir: str,
         all_agents_md += f"- **{a.name}** (`{a.id}`) — {a.role}, zone: {a.zone}\n"
 
     for i, agent in enumerate(enterprise.agents):
-        agent_dir = os.path.join(output_dir, agent.id)
-        ws_dir = os.path.join(agent_dir, "workspace")
+        # Each agent gets a state directory that mirrors ~/.openclaw/:
+        #   <agent_id>/
+        #     openclaw.json
+        #     agents/main/agent/auth-profiles.json
+        #     workspace/{IDENTITY,SOUL,AGENTS}.md
+        state_dir = os.path.join(output_dir, agent.id)
+        ws_dir = os.path.join(state_dir, "workspace")
         os.makedirs(ws_dir, exist_ok=True)
 
         port = base_port + i
 
-        # openclaw.json (JSON5 — the real OpenClaw config format).
-        with open(os.path.join(agent_dir, "openclaw.json"), "w") as f:
-            f.write(_build_openclaw_config(
-                agent.id, agent.name, port, provider, model,
-            ))
+        # Workspace path for openclaw.json.  When running inside Docker,
+        # pass --runtime-prefix /app/docker/agents so paths resolve
+        # correctly inside the container.
+        if runtime_prefix:
+            abs_ws = os.path.join(runtime_prefix, agent.id, "workspace")
+        else:
+            abs_ws = os.path.join(os.path.abspath(state_dir), "workspace")
+
+        # openclaw.json — must register "main" agent and set workspace.
+        with open(os.path.join(state_dir, "openclaw.json"), "w") as f:
+            f.write(_build_openclaw_config(provider, model, abs_ws))
+
+        # auth-profiles.json — LLM API key.
+        # Path: <state_dir>/agents/main/agent/auth-profiles.json
+        agent_auth_dir = os.path.join(state_dir, "agents", "main", "agent")
+        os.makedirs(agent_auth_dir, exist_ok=True)
+        with open(os.path.join(agent_auth_dir, "auth-profiles.json"), "w") as f:
+            f.write(_build_auth_profiles(provider))
 
         # IDENTITY.md — rich agent profile.
         role_desc = ROLE_DESCRIPTIONS.get(agent.role, "General enterprise agent.")
@@ -220,6 +243,19 @@ def generate(enterprise_path: str, output_dir: str,
                 for ka in agent.known_agents:
                     f.write(f"- **{ka.id}** ({ka.relationship}): {ka.notes}\n")
 
+        # Minimal stubs for files OpenClaw auto-generates (TOOLS.md,
+        # USER.md, HEARTBEAT.md).  Without these, OpenClaw injects its
+        # default templates (~10k chars of irrelevant content).
+        for stub_name, stub_content in [
+            ("TOOLS.md", "# Tools\nUse the ACES action format described in each message.\n"),
+            ("USER.md", f"# Simulation Controller\nACES enterprise simulation engine.\n"),
+            ("HEARTBEAT.md", "# Heartbeat\nReply HEARTBEAT_OK when idle.\n"),
+        ]:
+            stub_path = os.path.join(ws_dir, stub_name)
+            if not os.path.exists(stub_path):
+                with open(stub_path, "w") as f:
+                    f.write(stub_content)
+
         print(f"  [{i+1:2d}] {agent.id:<20} port {port}  zone={agent.zone}")
 
     # Write a port mapping file for the simulator.
@@ -241,12 +277,16 @@ def main():
     parser.add_argument("--output", default="docker/agents")
     parser.add_argument("--provider", default="anthropic",
                         choices=["anthropic", "openai"])
-    parser.add_argument("--model", default="claude-sonnet-4-20250514")
+    parser.add_argument("--model", default="claude-sonnet-4-6")
     parser.add_argument("--base-port", type=int, default=18701)
+    parser.add_argument("--runtime-prefix", default="",
+                        help="Override workspace prefix for Docker "
+                             "(e.g., /app/docker/agents)")
     args = parser.parse_args()
 
     print("Generating OpenClaw agent configs...")
-    generate(args.config, args.output, args.provider, args.model, args.base_port)
+    generate(args.config, args.output, args.provider, args.model,
+             args.base_port, args.runtime_prefix)
 
 
 if __name__ == "__main__":

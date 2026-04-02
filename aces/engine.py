@@ -197,6 +197,13 @@ class TurnManager:
                     agent, recipient, action.subject, action.body,
                     sim_day=sim_day, sim_tick=sim_tick,
                 )
+                if msg:
+                    self.db.upsert_memory(MemoryEntry(
+                        agent_id=agent.id, category="contacts",
+                        key=recipient,
+                        value=f"Sent mail '{action.subject}' on day {sim_day}",
+                        sim_day_created=sim_day, sim_day_updated=sim_day,
+                    ))
                 return msg is not None, 0, 1
             return False, 0, 0
 
@@ -348,10 +355,15 @@ class TurnManager:
 
         if isinstance(action, RespondDelegationAction):
             if self.svc.delegation:
+                deleg = self.db.get_delegation(action.delegation_id)
                 self.svc.delegation.respond(
                     agent, action.delegation_id, action.accept,
                     sim_day=sim_day, sim_tick=sim_tick,
                 )
+                # Track collaborator on the delegated job.
+                if action.accept and deleg and deleg.get("job_id"):
+                    self.db.add_job_collaborator(
+                        deleg["job_id"], agent.id)
                 return True, 0, 1
             return False, 0, 0
 
@@ -374,6 +386,13 @@ class TurnManager:
                     agent, action.document_id, action.new_content,
                     sim_day=sim_day, sim_tick=sim_tick,
                 )
+                if ok:
+                    self.db.upsert_memory(MemoryEntry(
+                        agent_id=agent.id, category="knowledge",
+                        key=f"updated_doc_{action.document_id[:8]}",
+                        value=f"Updated doc '{action.document_id}' on day {sim_day}",
+                        sim_day_created=sim_day, sim_day_updated=sim_day,
+                    ))
                 return ok, 0, 1
             return False, 0, 0
 
