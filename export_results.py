@@ -17,12 +17,18 @@ def export_db(db_path: str) -> dict:
     "agents": q("SELECT * FROM agents"),
     "events": q("SELECT * FROM events ORDER BY created_at"),
     "incidents": q("SELECT * FROM incidents ORDER BY sim_day_detected"),
-    "messages": q("SELECT * FROM messages ORDER BY delivered_at"),
+    "messages": q("""
+    SELECT m.*,
+    CAST((julianday(m.delivered_at) - julianday(r.started_at)) AS INTEGER) + 1 as sim_day
+    FROM messages m, runs r
+    ORDER BY m.delivered_at
+    """),
     "jobs": q("SELECT * FROM jobs ORDER BY created_day"),
     "agent_memory": q("SELECT * FROM agent_memory ORDER BY sim_day_updated"),
     "metric_snapshots": q("SELECT * FROM metric_snapshots ORDER BY sim_day"),
     "ledger": q("SELECT * FROM ledger ORDER BY sim_day"),
 }
+
     conn.close()
     return data
 

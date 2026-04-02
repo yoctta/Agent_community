@@ -331,7 +331,7 @@ function render(d) {
   allEvents = [];
   d.incidents.forEach(i => allEvents.push({ day: i.sim_day_detected||0, type:'incident', text:`<span class="tl-agent">${i.target_agent_id}</span> hit by <strong style="color:var(--red)">${i.incident_type}</strong> attack — ${i.severity} severity` }));
   completed.forEach(j => allEvents.push({ day: j.created_day||0, type:'job', text:`<span class="tl-agent">${j.assigned_to||'?'}</span> completed <em>${j.title}</em> <span style="color:var(--green)">+$${j.reward}</span>` }));
-  d.messages.forEach(m => allEvents.push({ day:0, type:'mail', text:`<span class="tl-agent">${m.sender_id}</span> → <span class="tl-agent">${m.recipient_id}</span>: ${m.subject}` }));
+  d.messages.forEach(m => allEvents.push({ day:m.sim_day||0, type:'mail', text:`<span class="tl-agent">${m.sender_id}</span> → <span class="tl-agent">${m.recipient_id}</span>: ${m.subject}` }));
   d.agent_memory.filter(m=>m.sim_day_updated>0).forEach(m => allEvents.push({ day:m.sim_day_updated, type:'memory', text:`<span class="tl-agent">${m.agent_id}</span> memory: <span style="color:var(--muted)">${m.value.slice(0,100)}</span>` }));
   allEvents.sort((a,b) => b.day - a.day);
   renderTimeline();
