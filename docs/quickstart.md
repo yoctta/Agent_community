@@ -1,161 +1,175 @@
 # Quickstart
 
-ACES runs a simulated enterprise where 12 AI agents work, communicate, and collaborate across segmented intranets.
+ACES runs a simulated enterprise where 12 AI agents work, communicate, and collaborate across segmented intranets. Each agent is powered by an LLM (via [OpenClaw](https://github.com/openclaw/openclaw) or direct API calls).
 
 ## Two ways to run
 
 | Mode | Docker needed? | Best for |
 |------|:--------------:|----------|
-| Direct LLM | No | Lightweight runs without OpenClaw |
-| OpenClaw agents | Yes | Full autonomous agent simulation |
+| Direct LLM | No | Quick runs without OpenClaw setup |
+| OpenClaw agents | Optional | Full autonomous agents with rich identity/personality |
 
-Both require an LLM API key (Anthropic, OpenAI, OpenRouter, Ollama, or any OpenAI-compatible provider).
+Both require an LLM API key (Anthropic, OpenAI, OpenRouter, or any OpenAI-compatible provider). Ollama works locally without a key.
 
 ---
 
 ## Mode 1: Direct LLM API
 
-The simulator calls Anthropic or OpenAI directly for each agent decision. No Docker, no OpenClaw.
+The simulator calls the LLM directly for each agent decision. No Docker, no OpenClaw.
 
 ```bash
 pip install pyyaml httpx
 
-# With Anthropic (Claude):
+# Anthropic (Claude):
 python run_experiment.py single \
   --backend anthropic \
-  --model claude-sonnet-4-20250514 \
-  --api-key sk-ant-api03-your-key-here
+  --model claude-sonnet-4-6 \
+  --api-key sk-ant-your-key-here
 
-# With OpenAI:
+# OpenAI:
 python run_experiment.py single \
-  --backend openai \
-  --model gpt-4o \
-  --api-key sk-your-openai-key
+  --backend openai --model gpt-4o --api-key sk-...
+
+# OpenRouter (any model):
+python run_experiment.py single \
+  --backend openrouter --model anthropic/claude-sonnet-4-6 --api-key sk-or-...
+
+# Ollama (local, no key):
+python run_experiment.py single --backend ollama --model llama3
 ```
 
-How it works: the simulator formats each agent's observation (inbox, jobs, delegations) as a prompt, sends it to the LLM API with the agent's role-filtered tool definitions, and parses the response into actions.
-
-**Cost estimate:** ~12 agents x 6 ticks/day x 30 days = ~2,160 LLM calls per run. At ~500 tokens per call, that's roughly $1-5 per run depending on the model.
+How it works: the simulator formats each agent's observation (inbox, jobs, delegations, memory) as a prompt with role-filtered action definitions, sends it to the LLM, and parses the JSON response into actions.
 
 ---
 
-## Mode 2: OpenClaw agents (full Docker stack)
+## Mode 2: OpenClaw agents (embedded mode)
 
-Each agent runs as an autonomous OpenClaw instance in its own Docker container with its own LLM connection.
+Each agent turn runs `openclaw agent --local` as a subprocess. OpenClaw loads the agent's workspace files (IDENTITY.md with role/expertise, SOUL.md with personality, AGENTS.md with the enterprise directory), calls the LLM, and returns a response. This gives agents richer context than direct API calls.
 
-### Step 1: Configure your API key
-
-```bash
-cp .env.example .env
-```
-
-Edit `.env`:
+### Prerequisites
 
 ```bash
-# For Anthropic:
-LLM_API_KEY=sk-ant-api03-your-anthropic-key
-LLM_PROVIDER=anthropic
-LLM_MODEL=claude-sonnet-4-20250514
-
-# OR for OpenAI:
-LLM_API_KEY=sk-your-openai-key
-LLM_PROVIDER=openai
-LLM_MODEL=gpt-4o
+pip install pyyaml httpx
+npm install -g openclaw     # or: npx openclaw
 ```
 
-### Step 2: Generate agent workspaces
-
-This creates a per-agent OpenClaw workspace directory with identity, personality, and gateway config:
+### Step 1: Generate agent workspaces
 
 ```bash
 python docker/generate_agent_configs.py
 ```
 
-The generator reads `LLM_PROVIDER` and `LLM_MODEL` and writes them into each agent's `config.yaml`. To switch models later:
-
-```bash
-python docker/generate_agent_configs.py --provider openai --model gpt-4o
+This creates per-agent state directories under `docker/agents/`:
+```
+docker/agents/eng_carol/
+  openclaw.json                           # agent config (model, workspace path)
+  agents/main/agent/auth-profiles.json    # LLM API key
+  workspace/
+    IDENTITY.md    # role, expertise, domain knowledge
+    SOUL.md        # personality, communication style, guidelines
+    AGENTS.md      # enterprise directory + personal relationships
 ```
 
-### Step 3: Start the simulation
+### Step 2: Set up API keys
+
+Copy your existing OpenClaw auth to each agent:
 
 ```bash
+for d in docker/agents/*/agents/main/agent; do
+  cp ~/.openclaw/agents/main/agent/auth-profiles.json "$d/"
+done
+```
+
+Or create auth-profiles.json manually:
+
+```json
+{
+  "version": 1,
+  "profiles": {
+    "anthropic:default": {
+      "type": "token",
+      "provider": "anthropic",
+      "token": "sk-ant-your-key-here"
+    }
+  }
+}
+```
+
+### Step 3: Run
+
+```bash
+python run_experiment.py single --backend openclaw --seed 42
+```
+
+### With Docker Compose
+
+Docker Compose adds self-hosted Moltbook (agent social network):
+
+```bash
+cp .env.example .env              # add your LLM_API_KEY
+python docker/generate_agent_configs.py
 docker compose up
 ```
 
-This starts 13 containers:
-- 12 OpenClaw gateways (ports 18701-18712), each running one agent
-- 1 ACES simulator that orchestrates the day/tick cycle
+This starts 3 containers:
+- **moltbook-db** — PostgreSQL for Moltbook
+- **moltbook** — self-hosted Moltbook API (built from source)
+- **simulator** — ACES engine with Node.js + OpenClaw installed
 
-### How the API key flows
+No separate agent containers — the simulator runs all 12 agents via embedded OpenClaw subprocesses, isolated by `OPENCLAW_STATE_DIR`.
+
+### How the API key flows (OpenClaw mode)
 
 ```
-.env (LLM_API_KEY=sk-ant-...)
+auth-profiles.json (per agent)
   │
-  ├─▶ docker-compose.yml (env_file: .env)
-  │     │
-  │     ├─▶ mgr-alice container (OpenClaw gateway)
-  │     │     └─▶ config.yaml: apiKey: "${LLM_API_KEY}"
-  │     │           └─▶ OpenClaw reads the env var at startup
-  │     │                 └─▶ Gateway calls Anthropic/OpenAI API
-  │     │
-  │     ├─▶ eng-carol container (same flow)
-  │     ├─▶ ... (12 containers total)
-  │     │
-  │     └─▶ simulator container
-  │           └─▶ Sends observations to each agent's gateway
-  │                 via HTTP (localhost:18701-18712)
-  │                 └─▶ Gateway forwards to LLM, returns actions
+  └─▶ OPENCLAW_STATE_DIR=docker/agents/<id>
+        └─▶ openclaw agent --agent main --session-id <uuid>
+              --message "<observation>" --json --local
+              │
+              ├─ reads: <state_dir>/agents/main/agent/auth-profiles.json
+              ├─ loads: <state_dir>/workspace/{IDENTITY,SOUL,AGENTS}.md
+              ├─ calls LLM (Anthropic/OpenAI/configured provider)
+              └─ returns JSON: { "payloads": [{ "text": "[actions]" }] }
 ```
-
-Each OpenClaw gateway:
-1. Reads `LLM_API_KEY` from its environment
-2. Loads its `config.yaml` which specifies the provider (anthropic/openai) and model
-3. Exposes an OpenAI-compatible HTTP API on its port
-4. When the simulator sends an observation, the gateway formats it with the agent's workspace context (IDENTITY.md, SOUL.md, AGENTS.md) and calls the LLM
-5. The LLM response (tool calls) flows back to the simulator
 
 ### Choosing a model
 
-| Model | Provider | Cost | Quality |
-|-------|----------|------|---------|
-| `claude-sonnet-4-20250514` | anthropic | $$ | Good balance of cost and reasoning |
-| `claude-opus-4-20250514` | anthropic | $$$$ | Best reasoning, highest cost |
-| `claude-haiku-4-5-20251001` | anthropic | $ | Fast, cheapest, simpler behavior |
+| Model | Provider flag | Cost | Notes |
+|-------|----------|------|-------|
+| `claude-sonnet-4-6` | anthropic | $$ | Good balance — recommended |
+| `claude-opus-4-6` | anthropic | $$$$ | Best reasoning |
+| `claude-haiku-4-5` | anthropic | $ | Fast, cheapest |
 | `gpt-4o` | openai | $$ | Strong general purpose |
-| `gpt-4o-mini` | openai | $ | Budget option |
-
-For full experiments (160 runs), start with a cheaper model. For single-run validation, use a stronger model.
+| `llama3` | ollama | Free | Local, no API key |
 
 ---
 
 ## View results
 
 ```bash
-# Summary table of all conditions
+# Summary table
 python run_experiment.py analyze -o results
 
-# Raw data in per-run SQLite databases
-ls results/run_*.db
-
 # Inspect a specific run
-python -c "
+python3 -c "
 from aces.database import Database
 db = Database('results/run_XXXX.db')
-print(f'Events: {len(db.get_events())}')
-print(f'Jobs: {len(db.get_all_jobs())}')
 for a in db.get_all_agents():
-    print(f'  {a.name}: balance=\${a.wallet_balance:.2f} status={a.status.value}')
+    print(f'{a.name}: balance=\${a.wallet_balance:.2f} jobs={a.jobs_completed} trust={a.trust_score:.2f}')
+events = db.get_events()
+print(f'Total events: {len(events)}')
 db.close()
 "
 ```
 
-## What happens during a simulation
+## Performance
 
-Each simulated day:
-1. New jobs generated (payroll, code reviews, deployments, support tickets)
-2. Each agent gets 6 turns per day, up to 3 actions per turn
-3. Agents read mail, claim jobs, delegate tasks, update wiki, build intranet pages, post on Moltbook
-4. At end of day: salaries paid, overdue jobs penalized, defenses evaluated, metrics snapshotted
+Each agent turn takes ~6 seconds with Claude Sonnet via OpenClaw (~2s with direct API).
 
-A typical 30-day run produces ~8,600 events: 1,100 organic mails, 500 delegations, 120 wiki edits, 60 Moltbook posts, 7+ intranet pages, and 260 jobs.
+| Config | Turns/day | Wall time/day |
+|--------|-----------|---------------|
+| 12 agents, 6 ticks | 72 | ~8 min (OpenClaw) / ~2.5 min (direct) |
+| 12 agents, 3 ticks | 36 | ~4 min (OpenClaw) / ~1.5 min (direct) |
+
+A default 30-day run: ~4 hours (OpenClaw) or ~1.5 hours (direct LLM).

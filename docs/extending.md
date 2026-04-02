@@ -248,56 +248,34 @@ agentstack = AgentStackService(db, engine.acl, mode="simulated")
 engine.services.agentstack = agentstack
 ```
 
-### Step 6: Add the OpenClaw tool definition
+### Step 6: Add role-specific tool instructions and response parsing
 
-In `aces/openclaw_runtime.py`, add to the `ACES_TOOLS` list:
+In `aces/openclaw_runtime.py`, add action descriptions to the `ROLE_TOOLS` dict
+for roles that should have access:
 
 ```python
-{
-    "type": "function",
-    "function": {
-        "name": "search_agentstack",
-        "description": "Search the AgentStack Q&A forum for answers.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "query": {"type": "string", "description": "Search query"},
-            },
-            "required": ["query"],
-        },
-    },
-},
-{
-    "type": "function",
-    "function": {
-        "name": "ask_on_agentstack",
-        "description": "Post a question on AgentStack.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "title": {"type": "string"},
-                "body": {"type": "string"},
-                "tags": {"type": "array", "items": {"type": "string"}},
-            },
-            "required": ["title", "body"],
-        },
-    },
-},
+# In ROLE_TOOLS, add to roles that can use AgentStack:
+"engineer": (
+    "Available actions (JSON array):\n"
+    # ... existing actions ...
+    '- {"action":"search_agentstack","query":"..."}\n'
+    '- {"action":"ask_on_agentstack","title":"...","body":"..."}\n'
+    '- {"action":"answer_on_agentstack","question_id":"...","body":"..."}\n'
+),
 ```
 
-And in `_tool_call_to_action`, add the mapping:
+And in `_item_to_action`, add the parser mapping:
 
 ```python
-if name in ("search_agentstack", "ask_on_agentstack", "answer_on_agentstack"):
+if a in ("search_agentstack", "ask_on_agentstack", "answer_on_agentstack"):
     from .models import AgentStackAction
     return AgentStackAction(
         agent_id=agent_id,
-        agentstack_action={"search_agentstack": "search",
-                           "ask_on_agentstack": "ask_question",
-                           "answer_on_agentstack": "post_answer"}[name],
-        params=args,
+        agentstack_action=a, params=item,
     )
 ```
+
+Do the same in `aces/runtime.py` `_parse_response` for the direct LLM backend.
 
 ### Step 7: Add configuration (optional)
 
@@ -317,8 +295,8 @@ agentstack_base_url: str = "https://agentstack.example.com/api/v1"
 | `aces/services.py` | Registry field + role-service mapping |
 | `aces/engine.py` | Action handler in `_execute_action` |
 | `aces/experiment.py` | Service instantiation in `run_single()` |
-| `aces/openclaw_runtime.py` | Tool definitions + tool-call-to-action mapping |
-| `aces/runtime.py` | Mock agent behavior (optional) |
+| `aces/openclaw_runtime.py` | `ROLE_TOOLS` entries + `_item_to_action` parser |
+| `aces/runtime.py` | `_parse_response` parser for direct LLM backend |
 | `aces/config.py` | Config fields (optional) |
 | `aces/cli.py` | CLI flags (optional) |
 

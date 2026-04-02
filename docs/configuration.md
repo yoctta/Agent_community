@@ -37,7 +37,7 @@ agents:
 python docker/generate_agent_configs.py
 ```
 
-**To remove an agent**, delete its block from the YAML and the corresponding service from `docker-compose.yml`.
+**To remove an agent**, delete its block from the YAML and regenerate configs.
 
 ### Available roles
 
@@ -206,11 +206,12 @@ Each agent's OpenClaw workspace is in `docker/agents/<agent_id>/workspace/`. Aft
 
 | File | Purpose |
 |------|---------|
-| `IDENTITY.md` | Agent's role description and enterprise context |
-| `SOUL.md` | Behavioural guidelines, communication style, security awareness |
-| `AGENTS.md` | Directory of all other agents in the enterprise |
+| `IDENTITY.md` | Agent's role, expertise, domain knowledge, enterprise context |
+| `SOUL.md` | Personality, communication style, initiative level, security awareness |
+| `AGENTS.md` | Directory of all other agents + personal working relationships |
+| `TOOLS.md` | Minimal stub — tells agent to use ACES action format |
 
-Changes take effect on the next `docker compose up`.
+Changes take effect on the next simulation run. OpenClaw reads these files fresh for each agent turn.
 
 ---
 
@@ -231,16 +232,18 @@ enabled_classes: []
 ```
 
 **Add a 13th agent:**
-1. Add the agent to `config/enterprise.yaml`
+1. Add the agent block to `config/enterprise.yaml`
 2. Run `python docker/generate_agent_configs.py`
-3. Add a new service block to `docker-compose.yml` following the pattern
-4. Run `docker compose up`
+3. Copy auth-profiles.json to the new agent's state dir
+4. Run the simulation
 
 **Change the LLM model:**
 ```bash
-# In .env:
-LLM_MODEL=claude-opus-4-20250514
+python docker/generate_agent_configs.py --provider anthropic --model claude-opus-4-6
+```
 
-# Regenerate agent configs:
-python docker/generate_agent_configs.py --model claude-opus-4-20250514
+**Configure CSRI weights:**
+```yaml
+# In experiment.yaml — default is equal weights [0.25, 0.25, 0.25, 0.25]
+csri_weights: [0.4, 0.3, 0.2, 0.1]  # [confidentiality, availability, economic, spread]
 ```
