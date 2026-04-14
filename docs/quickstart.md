@@ -156,7 +156,7 @@ python3 -c "
 from aces.database import Database
 db = Database('results/run_XXXX.db')
 for a in db.get_all_agents():
-    print(f'{a.name}: balance=\${a.wallet_balance:.2f} jobs={a.jobs_completed} trust={a.trust_score:.2f}')
+    print(f'{a.name}: balance=\${a.wallet_balance:.2f} jobs={a.jobs_completed} status={a.status.value}')
 events = db.get_events()
 print(f'Total events: {len(events)}')
 db.close()

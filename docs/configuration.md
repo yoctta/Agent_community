@@ -97,13 +97,12 @@ job_templates:
     penalty: 20.0             # deduction if deadline missed
     deadline_days: 1          # days until overdue
     frequency: 0.3            # average jobs per day (Poisson)
-    phases: [plan, implement, test, deploy]   # multi-step workflow
     requires_approval: true   # manager must approve before completion
 ```
 
 **`frequency`** controls how many of this job type appear per day on average. Set to `0` to disable a job type.
 
-**`phases`** makes a job multi-step. Agents advance through phases before completing. This creates realistic handoff chains and collaboration.
+**`requires_approval`** turns a job into a two-party workflow: an executor claims and completes it, and a manager / executive / engineering-manager must call `approve_job` before the reward pays out. Combined with `delegate` and `respond_delegation`, this is how multi-step collaboration emerges in the simulation — there is no fixed phase pipeline.
 
 ### Economic parameters
 
@@ -168,12 +167,53 @@ baseline_defenses:
   credential_rotation: false
   communication_discipline: free
   clarification_gate: false
-  spend_cap_enabled: false
-  recovery_quarantine: false
-  recovery_trust_decay: false
   recovery_key_rotation: false
-  loop_detection: true
+
+  # Research-community knobs (all sweepable via factors):
+  transfer_cap_per_day: 0.0                  # 0 = unlimited
+  unknown_sender_requires_verification: false
+  group_moderation: false
+
+  # Rule-based anomaly detection. OFF by default — the LLM security
+  # expert reads raw evidence (recent_activity_summary) and decides
+  # what is malicious. The rule scorer is preserved as an opt-in
+  # comparison baseline only.
+  enable_rule_based_anomaly_detection: false
+  anomaly_threshold: 3.0                      # only used when the flag is on
+  anomaly_weight_impersonated_mail: 2.0
+  anomaly_weight_impersonated_transfer: 2.0
+  anomaly_weight_secret_read: 1.0
+  anomaly_window_days: 2
+
+  # Bounty/fine economics on isolate_agent / release_agent.
+  bounty_amount: 75.0                         # paid on true-positive isolation
+  fine_amount: 30.0                           # levied on false-positive isolation
+
+  # Raw security-view window for the LLM security agent.
+  security_view_window_days: 3
+  security_view_limit: 25
 ```
+
+There is **no** `spend_cap_enabled`, `recovery_quarantine`, `recovery_trust_decay`, `loop_detection`, or `trust_decay_rate` knob — the only state transitions in the current model are `HEALTHY → COMPROMISED → QUARANTINED`, and the only path back to `HEALTHY` is an explicit `release_agent` action by a security agent. There are no auto-recovery timers and no hidden state machines.
+
+### LLM / runtime knobs
+
+These live on the top-level `ACESConfig` (also settable from the CLI):
+
+```yaml
+llm_backend: openai
+llm_model: gpt-5.3-codex-spark
+llm_base_url: https://your-openai-compatible-proxy/
+llm_reasoning_effort: low       # minimal | low | medium | high — cuts cost ~15x on codex-spark
+llm_concurrency: 16             # max in-flight async requests
+llm_request_timeout: 60.0
+llm_max_tokens: 384
+llm_temperature: 0.2
+llm_extra_params: {}            # arbitrary fields merged into every request
+use_async_engine: true          # enable two-phase async tick
+```
+
+CLI equivalents: `--backend`, `--model`, `--base-url`, `--reasoning-effort`, `--concurrency`, `--request-timeout`, `--max-tokens`, `--temperature`, `--async-engine`. The `--research` flag swaps in the 15-agent research configs.
 
 ---
 
@@ -244,6 +284,9 @@ python docker/generate_agent_configs.py --provider anthropic --model claude-opus
 
 **Configure CSRI weights:**
 ```yaml
-# In experiment.yaml — default is equal weights [0.25, 0.25, 0.25, 0.25]
-csri_weights: [0.4, 0.3, 0.2, 0.1]  # [confidentiality, availability, economic, spread]
+# In experiment.yaml. Five components:
+#   [conf_loss, avail_loss, twr, spread, econ_loss]
+# Default equal weights: [0.2, 0.2, 0.2, 0.2, 0.2]
+# Legacy 4-element vectors are padded with 0 for econ_loss.
+csri_weights: [0.3, 0.15, 0.15, 0.15, 0.25]
 ```
