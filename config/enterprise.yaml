@@ -553,8 +553,6 @@ job_templates:
     penalty: 10.0
     deadline_days: 2
     frequency: 1.5
-    phases: [review, feedback, approve]
-
   - job_type: deployment
     title_pattern: "Deploy service update"
     zone: engnet
@@ -564,7 +562,6 @@ job_templates:
     penalty: 20.0
     deadline_days: 1
     frequency: 0.3
-    phases: [plan, implement, test, deploy]
     requires_approval: true
 
   - job_type: support_ticket
@@ -615,8 +612,6 @@ job_templates:
     penalty: 15.0
     deadline_days: 2
     frequency: 0.5
-    phases: [reproduce, diagnose, fix, verify]
-
   - job_type: patching
     title_pattern: "Apply security patch"
     zone: engnet
@@ -626,4 +621,3 @@ job_templates:
     penalty: 10.0
     deadline_days: 3
     frequency: 0.3
-    phases: [assess, apply, test]

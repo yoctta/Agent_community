@@ -155,14 +155,120 @@ def run_single(cfg: ACESConfig, condition: Condition, seed: int,
     run_id = _uid()
     rng = random.Random(seed)
 
-    # Apply condition overrides to defenses.
-    cond_defenses = apply_condition_overrides(
+    # Apply condition overrides to defenses + world overlay.
+    overlay = apply_condition_overrides(
         cfg.experiment.baseline_defenses,
         condition.factor_levels,
         cfg.experiment.factors,
     )
+    cond_defenses = overlay.resolved_defenses
     run_cfg = copy.deepcopy(cfg)
     run_cfg.defenses = cond_defenses
+    run_cfg.scenario_overrides = overlay
+
+    # Surface overlay keys we couldn't apply so misconfigured factors
+    # are visible instead of silently dropped.
+    for name in overlay.unknown_defense_fields:
+        log.warning("condition %s: unknown DefenseOverrides field %r",
+                    condition.name, name)
+
+    # Apply agent disable/enable overlay to the enterprise snapshot.
+    disabled_ids: set[str] = set(overlay.disabled_agents)
+    if disabled_ids:
+        run_cfg.enterprise.agents = [
+            a for a in run_cfg.enterprise.agents
+            if a.id not in disabled_ids
+        ]
+        # Also strip disabled agents from group membership so that
+        # GroupMailService does not fan out messages to ghosts.  Drop
+        # the group entirely if no members remain.
+        filtered_groups = []
+        for g in run_cfg.enterprise.communication_groups:
+            g.members = [m for m in g.members if m not in disabled_ids]
+            g.admins = [m for m in g.admins if m not in disabled_ids]
+            if g.members:
+                filtered_groups.append(g)
+        run_cfg.enterprise.communication_groups = filtered_groups
+        # And strip from known_agents / manager_id on surviving agents
+        # so the social trust graph is consistent.
+        for a in run_cfg.enterprise.agents:
+            a.known_agents = [
+                ka for ka in a.known_agents if ka.id not in disabled_ids
+            ]
+            if a.manager_id in disabled_ids:
+                a.manager_id = None
+
+    if overlay.agent_updates:
+        by_id = {a.id: a for a in run_cfg.enterprise.agents}
+        for aid, patch in overlay.agent_updates.items():
+            a = by_id.get(aid)
+            if a is None:
+                log.warning("condition %s: agent_updates targets unknown agent %r",
+                            condition.name, aid)
+                continue
+            for k, v in patch.items():
+                if hasattr(a, k):
+                    setattr(a, k, v)
+                else:
+                    log.warning(
+                        "condition %s: agent_updates.%s: unknown field %r",
+                        condition.name, aid, k,
+                    )
+
+    # Apply group_updates overlay (posting_policy, members, admins).
+    if overlay.group_updates:
+        by_gid = {g.id: g for g in run_cfg.enterprise.communication_groups}
+        for gid, patch in overlay.group_updates.items():
+            g = by_gid.get(gid)
+            if g is None:
+                log.warning("condition %s: group_updates targets unknown group %r",
+                            condition.name, gid)
+                continue
+            for k, v in patch.items():
+                if hasattr(g, k):
+                    setattr(g, k, v)
+                else:
+                    log.warning(
+                        "condition %s: group_updates.%s: unknown field %r",
+                        condition.name, gid, k,
+                    )
+
+    # server_updates + attack_updates — apply what we can, warn on
+    # unknown fields.  ServerDef has a limited schema; fields outside
+    # that schema are accepted but logged.
+    if overlay.server_updates:
+        by_sid = {s.id: s for s in run_cfg.enterprise.servers}
+        for sid, patch in overlay.server_updates.items():
+            s = by_sid.get(sid)
+            if s is None:
+                log.warning("condition %s: server_updates targets unknown server %r",
+                            condition.name, sid)
+                continue
+            for k, v in patch.items():
+                if hasattr(s, k):
+                    setattr(s, k, v)
+                else:
+                    log.warning(
+                        "condition %s: server_updates.%s: unknown field %r",
+                        condition.name, sid, k,
+                    )
+
+    # attacks — top-level AttackConfig knobs (attacker_policy, etc.).
+    if overlay.attacks:
+        for k, v in overlay.attacks.items():
+            if k == "attacker_policy" and v not in {"llm", "scripted", "passive"}:
+                log.warning(
+                    "condition %s: ignoring invalid attacker_policy %r",
+                    condition.name, v,
+                )
+                continue
+            if hasattr(run_cfg.attacks, k):
+                setattr(run_cfg.attacks, k, v)
+            else:
+                log.warning(
+                    "condition %s: attacks.%s is not a known AttackConfig field",
+                    condition.name, k,
+                )
 
     # Database for this run.
     db_dir = output_dir or cfg.output_dir
@@ -178,6 +284,12 @@ def run_single(cfg: ACESConfig, condition: Condition, seed: int,
             cfg.llm_backend, model=cfg.llm_model,
             api_key=cfg.llm_api_key, base_url=cfg.llm_base_url,
             seed=seed,
+            reasoning_effort=cfg.llm_reasoning_effort,
+            extra_params=cfg.llm_extra_params or None,
+            concurrency=cfg.llm_concurrency,
+            request_timeout=cfg.llm_request_timeout,
+            max_tokens=cfg.llm_max_tokens,
+            temperature=cfg.llm_temperature,
         )
 
     # Engine.
@@ -269,9 +381,20 @@ def run_single(cfg: ACESConfig, condition: Condition, seed: int,
                 zone, sim_day=0,
             )
 
-    # Run.
-    log.info("starting run %s | condition=%s | seed=%d", run_id, condition.name, seed)
-    record = engine.run()
+    # Wire checkpoint sidecar so a crashed run can resume.
+    engine.checkpoint_path = os.path.join(db_dir, f"run_{run_id}.checkpoint.json")
+
+    # Run — async path when the config opts in, otherwise the legacy
+    # serial loop.  The async path parallelizes within-tick LLM calls
+    # so factorial studies complete in hours instead of days.
+    log.info("starting run %s | condition=%s | seed=%d%s",
+             run_id, condition.name, seed,
+             " (async)" if cfg.use_async_engine else "")
+    if cfg.use_async_engine:
+        import asyncio
+        record = asyncio.run(engine.run_async())
+    else:
+        record = engine.run()
     record.condition_name = condition.name
     record.seed = seed
     db.update_run(record)

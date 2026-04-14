@@ -25,15 +25,8 @@ baseline_defenses:
   rotation_interval_days: 5
   communication_discipline: free
   clarification_gate: false
-  spend_cap_enabled: false
-  spend_cap_per_day: 500.0
-  spend_cap_action: downgrade
-  recovery_quarantine: false
-  recovery_trust_decay: false
-  trust_decay_rate: 0.1
   recovery_key_rotation: false
-  loop_detection: true
-  loop_max_repeats: 5
+  enable_rule_based_anomaly_detection: false
 
 # --- Experimental Factors ---
 factors:
@@ -69,27 +62,20 @@ factors:
       communication_discipline: typed
       clarification_gate: true
 
-  - name: budget_control
-    description: "Budget policy: no cap vs hard spend cap with downgrade"
+  - name: transfer_controls
+    description: "Transfers: unlimited vs daily cap"
     level0_label: no_cap
-    level1_label: spend_cap
+    level1_label: capped
     level0_overrides:
-      spend_cap_enabled: false
+      transfer_cap_per_day: 0.0
     level1_overrides:
-      spend_cap_enabled: true
-      spend_cap_per_day: 300.0
-      spend_cap_action: downgrade
+      transfer_cap_per_day: 300.0
 
-  - name: recovery_controls
-    description: "Recovery: passive logging only vs quarantine, trust decay, and key rotation"
-    level0_label: passive
-    level1_label: active_recovery
+  - name: key_rotation
+    description: "Credential rotation on compromise: off vs on"
+    level0_label: no_rotation
+    level1_label: rotate_on_compromise
     level0_overrides:
-      recovery_quarantine: false
-      recovery_trust_decay: false
       recovery_key_rotation: false
     level1_overrides:
-      recovery_quarantine: true
-      recovery_trust_decay: true
-      trust_decay_rate: 0.15
       recovery_key_rotation: true

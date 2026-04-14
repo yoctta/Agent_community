@@ -175,62 +175,6 @@ class TestMultiStepJobs(unittest.TestCase):
     def tearDown(self):
         self.db.close()
 
-    def test_advance_phase(self):
-        a = _agent("e1", AgentRole.ENGINEER, Zone.ENGNET)
-        self.db.insert_agent(a)
-        j = Job(id="j1", title="Deploy", job_type=JobType.DEPLOYMENT,
-                zone=Zone.ENGNET, status=JobStatus.PENDING,
-                phases=["plan", "implement", "test", "deploy"],
-                current_phase=0)
-        self.db.insert_job(j)
-        self.db.claim_job("j1", "e1")
-
-        # Advance through phases.
-        self.assertTrue(self.db.advance_job_phase("j1"))
-        job = self.db.get_job("j1")
-        self.assertEqual(job.current_phase, 1)
-
-        self.assertTrue(self.db.advance_job_phase("j1"))
-        self.assertTrue(self.db.advance_job_phase("j1"))
-        job = self.db.get_job("j1")
-        self.assertEqual(job.current_phase, 3)
-
-        # Can't advance past final phase.
-        self.assertFalse(self.db.advance_job_phase("j1"))
-
-    def test_complete_blocked_until_final_phase(self):
-        """Engine blocks completion if not at final phase."""
-        from tests.stub_runtime import StubRuntime
-        from aces.engine import TurnManager
-        from aces.models import MemoryEntry
-
-        db = Database(":memory:")
-        acl = _flat_acl()
-        defenses = DefenseOverrides(segmentation="flat")
-        svc = ServiceRegistry.build(db, acl, defenses)
-        rt = StubRuntime(rng=random.Random(42))
-        tm = TurnManager(db, svc, rt, acl, defenses, random.Random(42))
-
-        eng = _agent("e1", AgentRole.ENGINEER, Zone.ENGNET)
-        db.insert_agent(eng)
-        j = Job(id="j1", title="Deploy", job_type=JobType.DEPLOYMENT,
-                zone=Zone.ENGNET, status=JobStatus.PENDING,
-                phases=["plan", "implement"], current_phase=0)
-        db.insert_job(j)
-        db.claim_job("j1", "e1")
-
-        from aces.models import CompleteJobAction
-        action = CompleteJobAction(agent_id="e1", job_id="j1",
-                                   result="done", tokens_spent=100)
-        ok, _, _ = tm._execute_action(action, eng, 1, 1, [])
-        self.assertFalse(ok, "completion should be blocked at phase 0 of 2")
-
-        # Advance to final phase and try again.
-        db.advance_job_phase("j1")
-        ok, _, _ = tm._execute_action(action, eng, 1, 1, [])
-        self.assertTrue(ok, "completion should succeed at final phase")
-        db.close()
-
     def test_collaborator_tracking(self):
         """Accepting a delegation adds agent as job collaborator."""
         from tests.stub_runtime import StubRuntime
@@ -269,6 +213,47 @@ class TestMultiStepJobs(unittest.TestCase):
         # Verify collaborator tracked.
         job = db.get_job("j1")
         self.assertIn("e1", job.collaborators)
+        db.close()
+
+    def test_send_mail_to_group_id_routes_as_group_post(self):
+        """Regression: when an LLM names a group id as the recipient
+        of a direct send_mail call, the engine should transparently
+        redirect to group_mail.send_group instead of dropping the
+        message with ``unknown recipient``."""
+        from tests.stub_runtime import StubRuntime
+        from aces.engine import TurnManager
+        db = Database(":memory:")
+        acl = _flat_acl()
+        defenses = DefenseOverrides(segmentation="flat")
+        svc = ServiceRegistry.build(db, acl, defenses)
+        rt = StubRuntime(rng=random.Random(42))
+        tm = TurnManager(db, svc, rt, acl, defenses, random.Random(42))
+
+        from aces.models import CommunicationGroup, SendMailAction
+
+        eng1 = _agent("e1", AgentRole.ENGINEER, Zone.ENGNET)
+        eng2 = _agent("e2", AgentRole.ENGINEER, Zone.ENGNET)
+        eng3 = _agent("e3", AgentRole.ENGINEER, Zone.ENGNET)
+        for a in (eng1, eng2, eng3):
+            db.insert_agent(a)
+        grp = CommunicationGroup(
+            id="grp_eng", name="Engineering",
+            description="",
+            members=["e1", "e2", "e3"],
+            admins=["e1"], posting_policy="members",
+        )
+        db.insert_group(grp)
+
+        action = SendMailAction(
+            agent_id="e1", recipient_id="grp_eng",
+            subject="status", body="update")
+        ok, *_ = tm._execute_action(action, eng1, 1, 1, [eng1, eng2, eng3])
+        self.assertTrue(ok)
+        # The two non-sender members should each see one new message.
+        inbox_e2 = db.get_unread_messages("e2")
+        inbox_e3 = db.get_unread_messages("e3")
+        self.assertEqual(len(inbox_e2), 1)
+        self.assertEqual(len(inbox_e3), 1)
         db.close()
 
 

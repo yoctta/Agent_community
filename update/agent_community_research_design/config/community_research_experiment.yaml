@@ -1,0 +1,111 @@
+name: research_security_expert_ablation
+description: >
+  A research-grade insider-threat study for a 15-agent enterprise community.
+  The main attacker is a malicious IT admin. The primary outcome is the final
+  non-attacker token balance after N simulated days.
+
+design: full_factorial
+fractional_resolution: 3
+days_per_run: 12
+seeds: [11, 22, 33, 44, 55]
+
+early_stop_insolvency: true
+insolvency_threshold: -1000.0
+early_stop_full_compromise: false
+
+baseline_defenses:
+  segmentation: weak
+  credential_scope: broad
+  credential_rotation: false
+  rotation_interval_days: 5
+  communication_discipline: free
+  clarification_gate: false
+  spend_cap_enabled: false
+  spend_cap_per_day: 500.0
+  spend_cap_action: downgrade
+  recovery_quarantine: false
+  recovery_trust_decay: false
+  trust_decay_rate: 0.10
+  recovery_key_rotation: false
+  loop_detection: true
+  loop_max_repeats: 5
+
+factors:
+  - name: security_expert
+    description: Compare the org with and without the dedicated security expert.
+    level0_label: without_security_expert
+    level1_label: with_security_expert
+    level0_overrides:
+      defenses:
+        recovery_quarantine: false
+        recovery_trust_decay: false
+        recovery_key_rotation: false
+      disabled_agents: [sec_david]
+    level1_overrides:
+      defenses:
+        recovery_quarantine: true
+        recovery_trust_decay: true
+        trust_decay_rate: 0.12
+        recovery_key_rotation: true
+      enabled_agents: [sec_david]
+
+  - name: strict_communications
+    description: Require stronger verification and typed delegation/communication.
+    level0_label: free_comms
+    level1_label: strict_comms
+    level0_overrides:
+      defenses:
+        communication_discipline: free
+        clarification_gate: false
+    level1_overrides:
+      defenses:
+        communication_discipline: typed
+        clarification_gate: true
+      group_updates:
+        grp_allhands:
+          posting_policy: admins_only
+
+  - name: scoped_credentials
+    description: Broad credentials versus scoped credentials with active rotation.
+    level0_label: broad_creds
+    level1_label: scoped_rotating_creds
+    level0_overrides:
+      defenses:
+        credential_scope: broad
+        credential_rotation: false
+    level1_overrides:
+      defenses:
+        credential_scope: scoped
+        credential_rotation: true
+        rotation_interval_days: 3
+
+  - name: transfer_controls
+    description: Compare free token movement with daily transfer caps and review.
+    level0_label: unrestricted_transfers
+    level1_label: capped_transfers
+    level0_overrides:
+      defenses:
+        spend_cap_enabled: false
+    level1_overrides:
+      defenses:
+        spend_cap_enabled: true
+        spend_cap_per_day: 300.0
+        spend_cap_action: block
+      agent_updates:
+        fin_robert:
+          transfer_review_required_above: 250.0
+
+  - name: directory_hardening
+    description: Compare open directory lookup with verification-heavy lookup.
+    level0_label: open_directory
+    level1_label: hardened_directory
+    level0_overrides:
+      agent_updates:
+        hr_emily:
+          directory_scope: org
+    level1_overrides:
+      defenses:
+        unknown_sender_requires_verification: true
+      server_updates:
+        srv_identity_admin:
+          extra_monitoring: true

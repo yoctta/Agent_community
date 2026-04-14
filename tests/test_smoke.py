@@ -115,7 +115,7 @@ class TestFactorial(unittest.TestCase):
         self.assertEqual(len(conds), 8)
 
     def test_condition_overrides(self):
-        base = DefenseOverrides(segmentation="flat", spend_cap_enabled=False)
+        base = DefenseOverrides(segmentation="flat")
         factors = [FactorDef(
             name="seg",
             level1_overrides={"segmentation": "strong"},
@@ -192,8 +192,11 @@ class TestBugFixes(unittest.TestCase):
                 )
             db.close()
 
-    def test_quarantine_not_permanent(self):
-        """Quarantined agent's trust recovers and eventually releases."""
+    def test_quarantine_released_only_by_explicit_action(self):
+        """Three-state model: quarantine persists until a security
+        agent invokes ``release_agent`` — there is no auto-recovery
+        timer.  This locks down the post-Track-A state machine where
+        the defense manager never rehabilitates agents on its own."""
         from aces.database import Database
         from aces.config import DefenseOverrides
         from aces.defenses import DefenseManager
@@ -202,31 +205,34 @@ class TestBugFixes(unittest.TestCase):
         import random
 
         db = Database(":memory:")
-        a = AgentState(id="a1", name="T", role=AgentRole.ENGINEER,
-                       zone=Zone.ENGNET, status=AgentStatus.QUARANTINED,
-                       trust_score=0.1)
-        db.insert_agent(a)
+        victim = AgentState(id="a1", name="T", role=AgentRole.ENGINEER,
+                             zone=Zone.ENGNET,
+                             status=AgentStatus.QUARANTINED)
+        sec = AgentState(id="sec1", name="S", role=AgentRole.SECURITY,
+                          zone=Zone.SECNET)
+        db.insert_agent(victim)
+        db.insert_agent(sec)
 
-        defenses = DefenseOverrides(
-            recovery_quarantine=True,
-            recovery_trust_decay=True,
-            trust_decay_rate=0.15,
-            recovery_key_rotation=False,
-        )
+        defenses = DefenseOverrides()
         cfg = self._make_cfg()
         acl = AccessControl.from_config(cfg.enterprise, defenses)
         svc = ServiceRegistry.build(db, acl, defenses)
         dm = DefenseManager(defenses, db, svc, random.Random(42))
 
-        # Run defense checks for many days — trust should climb.
+        # Barrier runs many days — no state change without an explicit
+        # action.
         for day in range(1, 30):
-            agent = db.get_agent("a1")
-            dm.run(day, [agent])
+            dm.run(day, db.get_all_agents())
+        self.assertEqual(
+            db.get_agent("a1").status, AgentStatus.QUARANTINED,
+            "quarantine must persist without an explicit release_agent call",
+        )
 
-        final = db.get_agent("a1")
-        self.assertEqual(final.status, AgentStatus.HEALTHY,
-                         f"agent still {final.status.value} after 29 days quarantine "
-                         f"(trust={final.trust_score:.2f})")
+        # Now an explicit release should flip the status back.
+        ok = dm.release_agent(sec, "a1", reason="review cleared",
+                                sim_day=30, sim_tick=0)
+        self.assertTrue(ok)
+        self.assertEqual(db.get_agent("a1").status, AgentStatus.HEALTHY)
         db.close()
 
     def test_attacks_before_turns(self):

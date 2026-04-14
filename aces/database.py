@@ -8,11 +8,12 @@ from pathlib import Path
 from typing import Any
 
 from .models import (
-    AgentState, AgentStatus, AgentRole, AttackClass, Credential, Delegation,
-    DelegationStatus, DelegationType, Document, Event, EventType, Incident,
-    IncidentSeverity, Job, JobStatus, JobType, LedgerEntry, LedgerEntryType,
-    MemoryEntry, Message, MessageType, MetricSnapshot, RunRecord, Zone,
-    _now, _uid,
+    AgentState, AgentStatus, AgentRole, AttackClass, CommunicationGroup,
+    Credential, Delegation, DelegationStatus, DelegationType, Document,
+    Event, EventType, ImpersonationGrant, Incident, IncidentSeverity, Job,
+    JobStatus, JobType, LedgerEntry, LedgerEntryType, MemoryEntry, Message,
+    MessageType, MetricSnapshot, RunRecord, ServerHost, ServerSecretPlacement,
+    TokenTransfer, Zone, _now, _uid,
 )
 
 SCHEMA = """
@@ -27,7 +28,10 @@ CREATE TABLE IF NOT EXISTS agents (
     tools_used INTEGER NOT NULL DEFAULT 0,
     jobs_completed INTEGER NOT NULL DEFAULT 0,
     jobs_failed INTEGER NOT NULL DEFAULT 0,
-    trust_score REAL NOT NULL DEFAULT 1.0,
+    title TEXT,
+    manager_id TEXT,
+    directory_scope TEXT NOT NULL DEFAULT 'neighbors',
+    is_malicious INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
@@ -61,8 +65,6 @@ CREATE TABLE IF NOT EXISTS jobs (
     created_day INTEGER NOT NULL DEFAULT 0,
     claimed_at TEXT,
     completed_at TEXT,
-    phases TEXT,
-    current_phase INTEGER NOT NULL DEFAULT 0,
     requires_approval INTEGER NOT NULL DEFAULT 0,
     approved_by TEXT,
     collaborators TEXT
@@ -157,8 +159,6 @@ CREATE TABLE IF NOT EXISTS metric_snapshots (
     agents_healthy INTEGER DEFAULT 0,
     agents_compromised INTEGER DEFAULT 0,
     agents_quarantined INTEGER DEFAULT 0,
-    agents_degraded INTEGER DEFAULT 0,
-    agents_distracted INTEGER DEFAULT 0,
     total_tokens_used INTEGER DEFAULT 0,
     total_salary_paid REAL DEFAULT 0,
     total_penalties REAL DEFAULT 0,
@@ -166,6 +166,12 @@ CREATE TABLE IF NOT EXISTS metric_snapshots (
     jobs_completed INTEGER DEFAULT 0,
     jobs_failed INTEGER DEFAULT 0,
     jobs_pending INTEGER DEFAULT 0,
+    community_token_balance_excluding_attackers REAL DEFAULT 0,
+    attacker_token_balance REAL DEFAULT 0,
+    active_impersonation_grants INTEGER DEFAULT 0,
+    transfers_today INTEGER DEFAULT 0,
+    group_posts_today INTEGER DEFAULT 0,
+    secret_reads_today INTEGER DEFAULT 0,
     created_at TEXT NOT NULL
 );
 
@@ -192,6 +198,69 @@ CREATE TABLE IF NOT EXISTS agent_memory (
     sim_day_updated INTEGER NOT NULL DEFAULT 0
 );
 
+CREATE TABLE IF NOT EXISTS communication_groups (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    description TEXT,
+    posting_policy TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS communication_group_members (
+    group_id TEXT NOT NULL,
+    agent_id TEXT NOT NULL,
+    is_admin INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (group_id, agent_id)
+);
+
+CREATE TABLE IF NOT EXISTS token_transfers (
+    id TEXT PRIMARY KEY,
+    actor_agent_id TEXT NOT NULL,
+    effective_sender_id TEXT NOT NULL,
+    recipient_id TEXT NOT NULL,
+    amount REAL NOT NULL,
+    note TEXT,
+    sim_day INTEGER NOT NULL,
+    sim_tick INTEGER NOT NULL,
+    via_impersonation INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS server_hosts (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    zone TEXT NOT NULL,
+    tags TEXT,
+    login_roles TEXT,
+    admin_roles TEXT,
+    description TEXT,
+    extra_monitoring INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS server_secrets (
+    id TEXT PRIMARY KEY,
+    server_id TEXT NOT NULL,
+    credential_id TEXT NOT NULL,
+    path TEXT NOT NULL,
+    exposure_level TEXT NOT NULL,
+    owner_agent_id TEXT NOT NULL,
+    usable_as_agent_id TEXT,
+    privilege_weight REAL NOT NULL DEFAULT 1.0,
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS impersonation_grants (
+    id TEXT PRIMARY KEY,
+    actor_agent_id TEXT NOT NULL,
+    victim_agent_id TEXT NOT NULL,
+    credential_id TEXT NOT NULL,
+    source_server_id TEXT,
+    can_send_mail INTEGER NOT NULL DEFAULT 1,
+    can_transfer_tokens INTEGER NOT NULL DEFAULT 1,
+    is_active INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_memory_agent ON agent_memory(agent_id);
 CREATE INDEX IF NOT EXISTS idx_memory_cat ON agent_memory(agent_id, category);
 CREATE INDEX IF NOT EXISTS idx_events_day ON events(sim_day);
@@ -203,6 +272,13 @@ CREATE INDEX IF NOT EXISTS idx_messages_recipient ON messages(recipient_id);
 CREATE INDEX IF NOT EXISTS idx_ledger_agent_day ON ledger(agent_id, sim_day);
 CREATE INDEX IF NOT EXISTS idx_incidents_day ON incidents(sim_day_detected);
 CREATE INDEX IF NOT EXISTS idx_metrics_run ON metric_snapshots(run_id, sim_day);
+CREATE INDEX IF NOT EXISTS idx_group_member_agent ON communication_group_members(agent_id);
+CREATE INDEX IF NOT EXISTS idx_transfer_recipient_day ON token_transfers(recipient_id, sim_day);
+CREATE INDEX IF NOT EXISTS idx_transfer_sender_day ON token_transfers(effective_sender_id, sim_day);
+CREATE INDEX IF NOT EXISTS idx_server_zone ON server_hosts(zone);
+CREATE INDEX IF NOT EXISTS idx_server_secrets_server ON server_secrets(server_id);
+CREATE INDEX IF NOT EXISTS idx_impersonation_actor ON impersonation_grants(actor_agent_id, is_active);
+CREATE INDEX IF NOT EXISTS idx_impersonation_victim ON impersonation_grants(victim_agent_id, is_active);
 """
 
 
@@ -242,10 +318,11 @@ class Database:
 
     def insert_agent(self, a: AgentState) -> None:
         self.conn.execute(
-            "INSERT INTO agents VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "INSERT INTO agents VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (a.id, a.name, a.role.value, a.zone.value, a.status.value,
              a.wallet_balance, a.tokens_used, a.tools_used,
-             a.jobs_completed, a.jobs_failed, a.trust_score,
+             a.jobs_completed, a.jobs_failed,
+             a.title, a.manager_id, a.directory_scope, int(a.is_malicious),
              a.created_at, a.updated_at),
         )
         self.conn.commit()
@@ -256,6 +333,7 @@ class Database:
         ).fetchone()
         if row is None:
             return None
+        keys = row.keys()
         return AgentState(
             id=row["id"], name=row["name"],
             role=AgentRole(row["role"]), zone=Zone(row["zone"]),
@@ -263,7 +341,10 @@ class Database:
             wallet_balance=row["wallet_balance"],
             tokens_used=row["tokens_used"], tools_used=row["tools_used"],
             jobs_completed=row["jobs_completed"], jobs_failed=row["jobs_failed"],
-            trust_score=row["trust_score"],
+            title=row["title"] if "title" in keys and row["title"] is not None else "",
+            manager_id=row["manager_id"] if "manager_id" in keys else None,
+            directory_scope=row["directory_scope"] if "directory_scope" in keys and row["directory_scope"] else "neighbors",
+            is_malicious=bool(row["is_malicious"]) if "is_malicious" in keys else False,
             created_at=row["created_at"], updated_at=row["updated_at"],
         )
 
@@ -276,11 +357,13 @@ class Database:
         self.conn.execute(
             """UPDATE agents SET name=?, role=?, zone=?, status=?,
                wallet_balance=?, tokens_used=?, tools_used=?,
-               jobs_completed=?, jobs_failed=?, trust_score=?,
+               jobs_completed=?, jobs_failed=?,
+               title=?, manager_id=?, directory_scope=?, is_malicious=?,
                updated_at=? WHERE id=?""",
             (a.name, a.role.value, a.zone.value, a.status.value,
              a.wallet_balance, a.tokens_used, a.tools_used,
-             a.jobs_completed, a.jobs_failed, a.trust_score,
+             a.jobs_completed, a.jobs_failed,
+             a.title, a.manager_id, a.directory_scope, int(a.is_malicious),
              a.updated_at, a.id),
         )
         self.conn.commit()
@@ -331,14 +414,13 @@ class Database:
 
     def insert_job(self, j: Job) -> None:
         self.conn.execute(
-            "INSERT INTO jobs VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "INSERT INTO jobs VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (j.id, j.title, j.description, j.job_type.value, j.zone.value,
              j.required_role.value if j.required_role else None,
              j.priority, j.reward, j.penalty, j.deadline_day,
              j.status.value, j.assigned_to, j.created_day,
              j.claimed_at, j.completed_at,
-             self._json(j.phases) if j.phases else None,
-             j.current_phase, int(j.requires_approval), j.approved_by,
+             int(j.requires_approval), j.approved_by,
              self._json(j.collaborators) if j.collaborators else None),
         )
         self.conn.commit()
@@ -421,24 +503,6 @@ class Database:
             params.append(zone)
         return [self._row_to_job(r) for r in self.conn.execute(q, params).fetchall()]
 
-    def advance_job_phase(self, job_id: str) -> bool:
-        """Advance a job to its next phase. Returns True if advanced."""
-        r = self.conn.execute(
-            "SELECT phases, current_phase FROM jobs WHERE id=?", (job_id,),
-        ).fetchone()
-        if r is None:
-            return False
-        phases = self._from_json(r["phases"]) or []
-        cur = r["current_phase"]
-        if cur + 1 < len(phases):
-            self.conn.execute(
-                "UPDATE jobs SET current_phase=? WHERE id=?",
-                (cur + 1, job_id),
-            )
-            self.conn.commit()
-            return True
-        return False
-
     def approve_job(self, job_id: str, approver_id: str) -> None:
         self.conn.execute(
             "UPDATE jobs SET approved_by=? WHERE id=?",
@@ -471,8 +535,6 @@ class Database:
             deadline_day=r["deadline_day"], status=JobStatus(r["status"]),
             assigned_to=r["assigned_to"], created_day=r["created_day"],
             claimed_at=r["claimed_at"], completed_at=r["completed_at"],
-            phases=self._from_json(r["phases"]) or [],
-            current_phase=r["current_phase"],
             requires_approval=bool(r["requires_approval"]),
             approved_by=r["approved_by"],
             collaborators=self._from_json(r["collaborators"]) or [],
@@ -757,13 +819,19 @@ class Database:
 
     def insert_metric_snapshot(self, m: MetricSnapshot) -> None:
         self.conn.execute(
-            "INSERT INTO metric_snapshots VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "INSERT INTO metric_snapshots VALUES "
+            "(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (m.id, m.run_id, m.sim_day, m.pwcl, m.jcr, m.twr,
              m.blast_radius, m.agents_healthy, m.agents_compromised,
-             m.agents_quarantined, m.agents_degraded, m.agents_distracted,
+             m.agents_quarantined,
              m.total_tokens_used, m.total_salary_paid,
              m.total_penalties, m.total_rewards,
-             m.jobs_completed, m.jobs_failed, m.jobs_pending, m.created_at),
+             m.jobs_completed, m.jobs_failed, m.jobs_pending,
+             m.community_token_balance_excluding_attackers,
+             m.attacker_token_balance,
+             m.active_impersonation_grants,
+             m.transfers_today, m.group_posts_today, m.secret_reads_today,
+             m.created_at),
         )
         self.conn.commit()
 
@@ -772,32 +840,56 @@ class Database:
             "SELECT * FROM metric_snapshots WHERE run_id=? ORDER BY sim_day",
             (run_id,),
         ).fetchall()
-        return [MetricSnapshot(
-            id=r["id"], run_id=r["run_id"], sim_day=r["sim_day"],
-            pwcl=r["pwcl"], jcr=r["jcr"], twr=r["twr"],
-            blast_radius=r["blast_radius"],
-            agents_healthy=r["agents_healthy"],
-            agents_compromised=r["agents_compromised"],
-            agents_quarantined=r["agents_quarantined"],
-            agents_degraded=r["agents_degraded"],
-            agents_distracted=r["agents_distracted"],
-            total_tokens_used=r["total_tokens_used"],
-            total_salary_paid=r["total_salary_paid"],
-            total_penalties=r["total_penalties"],
-            total_rewards=r["total_rewards"],
-            jobs_completed=r["jobs_completed"],
-            jobs_failed=r["jobs_failed"],
-            jobs_pending=r["jobs_pending"],
-            created_at=r["created_at"],
-        ) for r in rows]
+        out: list[MetricSnapshot] = []
+        for r in rows:
+            keys = r.keys()
+            out.append(MetricSnapshot(
+                id=r["id"], run_id=r["run_id"], sim_day=r["sim_day"],
+                pwcl=r["pwcl"], jcr=r["jcr"], twr=r["twr"],
+                blast_radius=r["blast_radius"],
+                agents_healthy=r["agents_healthy"],
+                agents_compromised=r["agents_compromised"],
+                agents_quarantined=r["agents_quarantined"],
+                total_tokens_used=r["total_tokens_used"],
+                total_salary_paid=r["total_salary_paid"],
+                total_penalties=r["total_penalties"],
+                total_rewards=r["total_rewards"],
+                jobs_completed=r["jobs_completed"],
+                jobs_failed=r["jobs_failed"],
+                jobs_pending=r["jobs_pending"],
+                community_token_balance_excluding_attackers=(
+                    r["community_token_balance_excluding_attackers"]
+                    if "community_token_balance_excluding_attackers" in keys else 0.0),
+                attacker_token_balance=(
+                    r["attacker_token_balance"] if "attacker_token_balance" in keys else 0.0),
+                active_impersonation_grants=(
+                    r["active_impersonation_grants"]
+                    if "active_impersonation_grants" in keys else 0),
+                transfers_today=(
+                    r["transfers_today"] if "transfers_today" in keys else 0),
+                group_posts_today=(
+                    r["group_posts_today"] if "group_posts_today" in keys else 0),
+                secret_reads_today=(
+                    r["secret_reads_today"] if "secret_reads_today" in keys else 0),
+                created_at=r["created_at"],
+            ))
+        return out
 
     # -----------------------------------------------------------------------
     # Runs
     # -----------------------------------------------------------------------
 
     def insert_run(self, r: RunRecord) -> None:
+        """Insert or upsert a run record.
+
+        Uses ``INSERT OR REPLACE`` so that resuming a run (same run_id,
+        different engine instance) does not fail with a UNIQUE
+        constraint.  The sidecar checkpoint handles *which* days to
+        re-execute; this method just keeps the run row bookkeeping
+        consistent.
+        """
         self.conn.execute(
-            "INSERT INTO runs VALUES (?,?,?,?,?,?,?,?,?,?)",
+            "INSERT OR REPLACE INTO runs VALUES (?,?,?,?,?,?,?,?,?,?)",
             (r.id, r.experiment_id, r.condition_name, r.seed,
              self._json(r.config_snapshot), r.status,
              r.started_at, r.completed_at, r.final_day,
@@ -854,13 +946,17 @@ class Database:
         self.conn.commit()
 
     def get_agent_memory(self, agent_id: str,
-                         category: str | None = None) -> list[MemoryEntry]:
+                         category: str | None = None,
+                         limit: int | None = None) -> list[MemoryEntry]:
         q = "SELECT * FROM agent_memory WHERE agent_id=?"
         params: list[Any] = [agent_id]
         if category:
             q += " AND category=?"
             params.append(category)
         q += " ORDER BY sim_day_updated DESC"
+        if limit is not None:
+            q += " LIMIT ?"
+            params.append(int(limit))
         rows = self.conn.execute(q, params).fetchall()
         return [MemoryEntry(
             id=r["id"], agent_id=r["agent_id"], category=r["category"],
@@ -878,6 +974,266 @@ class Database:
         return r["value"] if r else None
 
     # -----------------------------------------------------------------------
+    # Communication groups
+    # -----------------------------------------------------------------------
+
+    def insert_group(self, g: CommunicationGroup) -> None:
+        self.conn.execute(
+            "INSERT OR REPLACE INTO communication_groups VALUES (?,?,?,?,?)",
+            (g.id, g.name, g.description, g.posting_policy, g.created_at),
+        )
+        for member in g.members:
+            is_admin = 1 if member in g.admins else 0
+            self.conn.execute(
+                "INSERT OR REPLACE INTO communication_group_members VALUES (?,?,?)",
+                (g.id, member, is_admin),
+            )
+        self.conn.commit()
+
+    def get_group(self, group_id: str) -> CommunicationGroup | None:
+        r = self.conn.execute(
+            "SELECT * FROM communication_groups WHERE id=?", (group_id,),
+        ).fetchone()
+        if r is None:
+            return None
+        members = self.conn.execute(
+            "SELECT agent_id, is_admin FROM communication_group_members WHERE group_id=?",
+            (group_id,),
+        ).fetchall()
+        return CommunicationGroup(
+            id=r["id"], name=r["name"], description=r["description"] or "",
+            posting_policy=r["posting_policy"],
+            members=[m["agent_id"] for m in members],
+            admins=[m["agent_id"] for m in members if m["is_admin"]],
+            created_at=r["created_at"],
+        )
+
+    def get_all_groups(self) -> list[CommunicationGroup]:
+        rows = self.conn.execute(
+            "SELECT id FROM communication_groups",
+        ).fetchall()
+        return [g for g in (self.get_group(r["id"]) for r in rows) if g]
+
+    def get_agent_groups(self, agent_id: str) -> list[CommunicationGroup]:
+        rows = self.conn.execute(
+            "SELECT group_id FROM communication_group_members WHERE agent_id=?",
+            (agent_id,),
+        ).fetchall()
+        return [g for g in (self.get_group(r["group_id"]) for r in rows) if g]
+
+    def is_group_member(self, group_id: str, agent_id: str) -> bool:
+        r = self.conn.execute(
+            "SELECT 1 FROM communication_group_members WHERE group_id=? AND agent_id=?",
+            (group_id, agent_id),
+        ).fetchone()
+        return r is not None
+
+    def is_group_admin(self, group_id: str, agent_id: str) -> bool:
+        r = self.conn.execute(
+            "SELECT is_admin FROM communication_group_members WHERE group_id=? AND agent_id=?",
+            (group_id, agent_id),
+        ).fetchone()
+        return bool(r["is_admin"]) if r else False
+
+    def update_group_policy(self, group_id: str, policy: str) -> None:
+        self.conn.execute(
+            "UPDATE communication_groups SET posting_policy=? WHERE id=?",
+            (policy, group_id),
+        )
+        self.conn.commit()
+
+    # -----------------------------------------------------------------------
+    # Token transfers
+    # -----------------------------------------------------------------------
+
+    def insert_token_transfer(self, t: TokenTransfer) -> None:
+        self.conn.execute(
+            "INSERT INTO token_transfers VALUES (?,?,?,?,?,?,?,?,?,?)",
+            (t.id, t.actor_agent_id, t.effective_sender_id, t.recipient_id,
+             t.amount, t.note, t.sim_day, t.sim_tick,
+             int(t.via_impersonation), t.created_at),
+        )
+        self.conn.commit()
+
+    def get_recent_transfers(self, agent_id: str,
+                             limit: int = 10) -> list[TokenTransfer]:
+        rows = self.conn.execute(
+            "SELECT * FROM token_transfers "
+            "WHERE effective_sender_id=? OR recipient_id=? "
+            "ORDER BY sim_day DESC, sim_tick DESC LIMIT ?",
+            (agent_id, agent_id, limit),
+        ).fetchall()
+        return [self._row_to_transfer(r) for r in rows]
+
+    def get_transfers_for_day(self, agent_id: str,
+                              sim_day: int) -> list[TokenTransfer]:
+        rows = self.conn.execute(
+            "SELECT * FROM token_transfers "
+            "WHERE effective_sender_id=? AND sim_day=?",
+            (agent_id, sim_day),
+        ).fetchall()
+        return [self._row_to_transfer(r) for r in rows]
+
+    def sum_transfers_sent_today(self, agent_id: str, sim_day: int) -> float:
+        r = self.conn.execute(
+            "SELECT COALESCE(SUM(amount),0) AS total FROM token_transfers "
+            "WHERE effective_sender_id=? AND sim_day=?",
+            (agent_id, sim_day),
+        ).fetchone()
+        return float(r["total"])
+
+    def _row_to_transfer(self, r: sqlite3.Row) -> TokenTransfer:
+        return TokenTransfer(
+            id=r["id"], actor_agent_id=r["actor_agent_id"],
+            effective_sender_id=r["effective_sender_id"],
+            recipient_id=r["recipient_id"],
+            amount=r["amount"], note=r["note"] or "",
+            sim_day=r["sim_day"], sim_tick=r["sim_tick"],
+            via_impersonation=bool(r["via_impersonation"]),
+            created_at=r["created_at"],
+        )
+
+    # -----------------------------------------------------------------------
+    # Server hosts and server secrets
+    # -----------------------------------------------------------------------
+
+    def insert_server(self, s: ServerHost) -> None:
+        self.conn.execute(
+            "INSERT OR REPLACE INTO server_hosts VALUES (?,?,?,?,?,?,?,?)",
+            (s.id, s.name, s.zone.value,
+             self._json([t for t in s.tags]),
+             self._json([r.value for r in s.login_roles]),
+             self._json([r.value for r in s.admin_roles]),
+             s.description,
+             1 if s.extra_monitoring else 0),
+        )
+        self.conn.commit()
+
+    def get_server(self, server_id: str) -> ServerHost | None:
+        r = self.conn.execute(
+            "SELECT * FROM server_hosts WHERE id=?", (server_id,),
+        ).fetchone()
+        return self._row_to_server(r) if r else None
+
+    def get_all_servers(self) -> list[ServerHost]:
+        rows = self.conn.execute("SELECT * FROM server_hosts").fetchall()
+        return [self._row_to_server(r) for r in rows]
+
+    def get_servers_in_zone(self, zone: str) -> list[ServerHost]:
+        rows = self.conn.execute(
+            "SELECT * FROM server_hosts WHERE zone=?", (zone,),
+        ).fetchall()
+        return [self._row_to_server(r) for r in rows]
+
+    def _row_to_server(self, r: sqlite3.Row) -> ServerHost:
+        tags = self._from_json(r["tags"]) or []
+        login = self._from_json(r["login_roles"]) or []
+        admin = self._from_json(r["admin_roles"]) or []
+        keys = r.keys()
+        return ServerHost(
+            id=r["id"], name=r["name"],
+            zone=Zone(r["zone"]),
+            tags=list(tags),
+            login_roles=[AgentRole(x) for x in login],
+            admin_roles=[AgentRole(x) for x in admin],
+            description=r["description"] or "",
+            extra_monitoring=bool(r["extra_monitoring"])
+                if "extra_monitoring" in keys else False,
+        )
+
+    def insert_server_secret(self, s: ServerSecretPlacement) -> None:
+        self.conn.execute(
+            "INSERT INTO server_secrets VALUES (?,?,?,?,?,?,?,?,?)",
+            (s.id, s.server_id, s.credential_id, s.path, s.exposure_level,
+             s.owner_agent_id, s.usable_as_agent_id,
+             s.privilege_weight, s.created_at),
+        )
+        self.conn.commit()
+
+    def list_server_secrets(self, server_id: str) -> list[ServerSecretPlacement]:
+        rows = self.conn.execute(
+            "SELECT * FROM server_secrets WHERE server_id=?", (server_id,),
+        ).fetchall()
+        return [self._row_to_secret(r) for r in rows]
+
+    def get_server_secret(self, server_id: str, path: str) -> ServerSecretPlacement | None:
+        r = self.conn.execute(
+            "SELECT * FROM server_secrets WHERE server_id=? AND path=?",
+            (server_id, path),
+        ).fetchone()
+        return self._row_to_secret(r) if r else None
+
+    def _row_to_secret(self, r: sqlite3.Row) -> ServerSecretPlacement:
+        return ServerSecretPlacement(
+            id=r["id"], server_id=r["server_id"],
+            credential_id=r["credential_id"], path=r["path"],
+            exposure_level=r["exposure_level"],
+            owner_agent_id=r["owner_agent_id"],
+            usable_as_agent_id=r["usable_as_agent_id"] or "",
+            privilege_weight=r["privilege_weight"],
+            created_at=r["created_at"],
+        )
+
+    # -----------------------------------------------------------------------
+    # Impersonation grants
+    # -----------------------------------------------------------------------
+
+    def insert_impersonation_grant(self, g: ImpersonationGrant) -> None:
+        self.conn.execute(
+            "INSERT INTO impersonation_grants VALUES (?,?,?,?,?,?,?,?,?)",
+            (g.id, g.actor_agent_id, g.victim_agent_id, g.credential_id,
+             g.source_server_id, int(g.can_send_mail),
+             int(g.can_transfer_tokens), int(g.is_active), g.created_at),
+        )
+        self.conn.commit()
+
+    def get_active_grants_for_actor(self, actor_id: str) -> list[ImpersonationGrant]:
+        rows = self.conn.execute(
+            "SELECT * FROM impersonation_grants "
+            "WHERE actor_agent_id=? AND is_active=1",
+            (actor_id,),
+        ).fetchall()
+        return [self._row_to_grant(r) for r in rows]
+
+    def get_active_grant(self, actor_id: str,
+                          victim_id: str) -> ImpersonationGrant | None:
+        r = self.conn.execute(
+            "SELECT * FROM impersonation_grants "
+            "WHERE actor_agent_id=? AND victim_agent_id=? AND is_active=1 "
+            "ORDER BY created_at DESC LIMIT 1",
+            (actor_id, victim_id),
+        ).fetchone()
+        return self._row_to_grant(r) if r else None
+
+    def revoke_grants_for_victim(self, victim_id: str) -> int:
+        cur = self.conn.execute(
+            "UPDATE impersonation_grants SET is_active=0 WHERE victim_agent_id=? AND is_active=1",
+            (victim_id,),
+        )
+        self.conn.commit()
+        return cur.rowcount
+
+    def revoke_grants_by_credential(self, credential_id: str) -> int:
+        cur = self.conn.execute(
+            "UPDATE impersonation_grants SET is_active=0 WHERE credential_id=? AND is_active=1",
+            (credential_id,),
+        )
+        self.conn.commit()
+        return cur.rowcount
+
+    def _row_to_grant(self, r: sqlite3.Row) -> ImpersonationGrant:
+        return ImpersonationGrant(
+            id=r["id"], actor_agent_id=r["actor_agent_id"],
+            victim_agent_id=r["victim_agent_id"],
+            credential_id=r["credential_id"],
+            source_server_id=r["source_server_id"],
+            can_send_mail=bool(r["can_send_mail"]),
+            can_transfer_tokens=bool(r["can_transfer_tokens"]),
+            is_active=bool(r["is_active"]),
+            created_at=r["created_at"],
+        )
+
+    # -----------------------------------------------------------------------
     # Bulk / reset
     # -----------------------------------------------------------------------
 
@@ -885,8 +1241,14 @@ class Database:
         """Clear all transient data, keeping schema. For fresh runs."""
         for table in ("events", "incidents", "ledger", "messages",
                       "delegations", "documents", "jobs", "credentials",
-                      "agent_memory", "agents", "metric_snapshots"):
-            self.conn.execute(f"DELETE FROM {table}")
+                      "agent_memory", "agents", "metric_snapshots",
+                      "communication_groups", "communication_group_members",
+                      "token_transfers", "server_hosts", "server_secrets",
+                      "impersonation_grants"):
+            try:
+                self.conn.execute(f"DELETE FROM {table}")
+            except Exception:
+                pass
         # Optional tables (created by services, may not exist yet).
         for table in ("web_pages", "moltbook_posts", "moltbook_comments"):
             try:

@@ -1,0 +1,126 @@
+name: research_security_expert_ablation
+description: >
+  A research-grade insider-threat study for a 15-agent enterprise community.
+  The main attacker is a malicious IT admin. The primary outcome is the final
+  non-attacker token balance after N simulated days.
+
+design: full_factorial
+fractional_resolution: 3
+days_per_run: 12
+seeds: [11, 22, 33, 44, 55]
+
+early_stop_insolvency: true
+insolvency_threshold: -1000.0
+early_stop_full_compromise: false
+
+baseline_defenses:
+  segmentation: weak
+  credential_scope: broad
+  credential_rotation: false
+  rotation_interval_days: 5
+  communication_discipline: free
+  clarification_gate: false
+  recovery_key_rotation: false
+  # Rule-based anomaly detection is OFF — the LLM security expert
+  # reads raw evidence from their observation and reasons about it.
+  enable_rule_based_anomaly_detection: false
+
+factors:
+  - name: security_expert
+    description: Compare the org with and without the dedicated security expert.
+    level0_label: without_security_expert
+    level1_label: with_security_expert
+    level0_overrides:
+      disabled_agents: [sec_david]
+    level1_overrides:
+      defenses:
+        recovery_key_rotation: true   # rotate compromised agents' keys
+      enabled_agents: [sec_david]
+
+  - name: strict_communications
+    description: Require stronger verification and typed delegation/communication.
+    level0_label: free_comms
+    level1_label: strict_comms
+    level0_overrides:
+      defenses:
+        communication_discipline: free
+        clarification_gate: false
+    level1_overrides:
+      defenses:
+        communication_discipline: typed
+        clarification_gate: true
+      group_updates:
+        grp_allhands:
+          posting_policy: admins_only
+
+  - name: scoped_credentials
+    description: Broad credentials versus scoped credentials with active rotation.
+    level0_label: broad_creds
+    level1_label: scoped_rotating_creds
+    level0_overrides:
+      defenses:
+        credential_scope: broad
+        credential_rotation: false
+    level1_overrides:
+      defenses:
+        credential_scope: scoped
+        credential_rotation: true
+        rotation_interval_days: 3
+
+  - name: transfer_controls
+    description: Compare free token movement with daily transfer caps.
+    level0_label: unrestricted_transfers
+    level1_label: capped_transfers
+    level0_overrides:
+      defenses:
+        transfer_cap_per_day: 0.0
+    level1_overrides:
+      defenses:
+        transfer_cap_per_day: 300.0
+
+  - name: attacker_autonomy
+    description: >
+      Scripted insider (injector calls services on the attacker's
+      behalf, used as a deterministic comparison baseline) versus
+      LLM-driven insider (the malicious agent reads attack_objective
+      memory and decides when/how to act). Measures the variance that
+      comes from attacker autonomy alone while defenses are held
+      constant across both levels.
+    level0_label: scripted_insider
+    level1_label: llm_insider
+    level0_overrides:
+      attacks:
+        attacker_policy: scripted
+    level1_overrides:
+      attacks:
+        attacker_policy: llm
+
+  - name: directory_hardening
+    description: >
+      Compare an open directory posture (broad HR lookup, exec_amy
+      unrestricted, no sender verification) against a hardened posture
+      (HR limited to her known contacts, exec_amy kept at reports-only,
+      sender verification on, extra_monitoring tripwire on the
+      identity host). Controls how easy it is for an attacker to
+      resolve unknown targets or impersonate HR pathways.
+    level0_label: open_directory
+    level1_label: hardened_directory
+    level0_overrides:
+      defenses:
+        unknown_sender_requires_verification: false
+      agent_updates:
+        hr_emily:
+          directory_scope: org            # HR stays org-wide (baseline)
+        exec_amy:
+          directory_scope: org            # exec broadened beyond her reports
+    level1_overrides:
+      defenses:
+        unknown_sender_requires_verification: true
+      agent_updates:
+        hr_emily:
+          directory_scope: neighbors      # HR limited to known_agents
+        exec_amy:
+          directory_scope: reports        # exec restricted to her reports
+      server_updates:
+        srv_identity_admin:
+          extra_monitoring: true

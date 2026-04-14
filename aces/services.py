@@ -1,4 +1,5 @@
-"""Enterprise services: mail, delegation, wiki, vault, IAM."""
+"""Enterprise services: mail, delegation, wiki, vault, IAM,
+directory, group mail, token economy, host access, impersonation."""
 
 from __future__ import annotations
 
@@ -7,14 +8,16 @@ import secrets
 from dataclasses import dataclass, field
 from typing import Any
 
-from .config import DefenseOverrides
+from .config import DefenseOverrides, TokenPolicyDef
 from .database import Database
 from .models import (
-    AgentState, AttackClass, Credential, Delegation, DelegationStatus,
-    DelegationType, Document, Event, EventType, LedgerEntry, LedgerEntryType,
-    Message, MessageType, Zone, _now, _uid,
+    AgentRole, AgentState, AgentStatus, AttackClass, CommunicationGroup,
+    Credential, Delegation, DelegationStatus, DelegationType, Document,
+    Event, EventType, ImpersonationGrant, LedgerEntry, LedgerEntryType,
+    Message, MessageType, ServerHost, ServerSecretPlacement, TokenTransfer,
+    Zone, _now, _uid,
 )
-from .network import AccessControl, AccessDecision
+from .network import AccessControl, AccessDecision, CommunicationPolicy, SocialTrustGraph
 
 log = logging.getLogger(__name__)
 
@@ -26,9 +29,13 @@ log = logging.getLogger(__name__)
 class MailService:
     """Asynchronous enterprise mail routed through the simulator."""
 
-    def __init__(self, db: Database, acl: AccessControl):
+    def __init__(self, db: Database, acl: AccessControl,
+                 comms_policy: "CommunicationPolicy | None" = None,
+                 defenses: DefenseOverrides | None = None):
         self.db = db
         self.acl = acl
+        self.comms_policy = comms_policy
+        self.defenses = defenses or DefenseOverrides()
 
     def send(self, sender: AgentState, recipient_id: str,
              subject: str, body: str, *,
@@ -36,8 +43,21 @@ class MailService:
              sim_day: int = 0, sim_tick: int = 0,
              is_attack: bool = False,
              attack_class: AttackClass | None = None,
-             attack_payload: dict[str, Any] | None = None) -> Message | None:
-        """Send a mail message. Returns None if blocked by ACL."""
+             attack_payload: dict[str, Any] | None = None,
+             actor: AgentState | None = None,
+             trust_override: str | None = None) -> Message | None:
+        """Send a mail message. Returns None if blocked.
+
+        When *actor* is supplied and differs from *sender*, this is an
+        impersonated send: ``sender`` is the effective identity the
+        recipient sees, and ``actor`` is the real agent doing the work.
+        The caller (engine) is responsible for verifying the
+        impersonation grant before invoking this.
+
+        ``trust_override`` lets callers (e.g. attack injector) force a
+        specific trust label so verification-gate defenses can treat
+        spoofed mail as unknown even if the sender is a neighbour.
+        """
         recipient = self.db.get_agent(recipient_id)
         if recipient is None:
             log.warning("mail: unknown recipient %s", recipient_id)
@@ -46,6 +66,38 @@ class MailService:
         if not check.allowed:
             log.info("mail blocked: %s → %s (%s)", sender.id, recipient_id, check.reason)
             return None
+
+        # Compute trust level first so defenses can reason about it
+        # regardless of whether this is an attack send.  The policy
+        # delivery gate (D2) is skipped for attacks — their whole
+        # premise is reaching untrusted agents — but D1 still applies.
+        shared_group = False
+        trust_level = "unknown"
+        if self.comms_policy is not None:
+            shared_group = self._shares_group(sender.id, recipient.id)
+            trust_level = self.comms_policy.sender_trust_level(
+                recipient, sender.id, shared_group=shared_group)
+        if trust_override is not None:
+            trust_level = trust_override
+        if self.comms_policy is not None and not is_attack:
+            if not self.comms_policy.can_direct_message(
+                    sender, recipient, shared_group=shared_group):
+                log.info("mail blocked by comms policy: %s → %s (level=%s)",
+                         sender.id, recipient_id, trust_level)
+                return None
+
+        # Defense D1 — unknown_sender_requires_verification.  When the
+        # defense is active and the sender is unknown to the recipient,
+        # refuse delivery.  A future enhancement could queue the mail
+        # for explicit approval; a hard block is simpler and sufficient
+        # for the factorial study.
+        if (self.defenses.unknown_sender_requires_verification
+                and trust_level == "unknown"):
+            log.info("mail blocked by verification gate: %s → %s",
+                     sender.id, recipient_id)
+            return None
+
+        via_imp = actor is not None and actor.id != sender.id
         msg = Message(
             sender_id=sender.id, recipient_id=recipient_id,
             subject=subject, body=body, zone=zone,
@@ -54,12 +106,24 @@ class MailService:
         )
         self.db.insert_message(msg)
         self.db.append_event(Event(
-            event_type=EventType.MAIL_SENT, agent_id=sender.id,
+            event_type=(EventType.IMPERSONATED_MAIL_SENT if via_imp
+                         else EventType.MAIL_SENT),
+            agent_id=(actor.id if actor is not None else sender.id),
             sim_day=sim_day, sim_tick=sim_tick, zone=zone,
             payload={"message_id": msg.id, "recipient": recipient_id,
-                     "is_attack": is_attack},
+                     "is_attack": is_attack,
+                     "effective_sender": sender.id,
+                     "via_impersonation": via_imp,
+                     "trust_level": trust_level},
         ))
         return msg
+
+    def _shares_group(self, a_id: str, b_id: str) -> bool:
+        groups = self.db.get_agent_groups(a_id)
+        for g in groups:
+            if b_id in g.members:
+                return True
+        return False
 
     def read_inbox(self, agent: AgentState, sim_day: int = 0,
                    sim_tick: int = 0) -> list[Message]:
@@ -318,6 +382,402 @@ class IAMService:
 
 
 # ---------------------------------------------------------------------------
+# Directory service — HR / org-wide contact lookup
+# ---------------------------------------------------------------------------
+
+class DirectoryService:
+    """Resolves agents by id, name, title, or role.
+
+    Enforces per-agent ``directory_scope`` via ``CommunicationPolicy``.
+    HR, security, and executives typically have ``directory_scope: org``
+    so they can resolve any agent; engineers only see their neighbors.
+    """
+
+    def __init__(self, db: Database, policy: CommunicationPolicy):
+        self.db = db
+        self.policy = policy
+
+    def lookup(self, agent: AgentState, query: str) -> list[AgentState]:
+        q = (query or "").strip().lower()
+        if not q:
+            return []
+        results: list[AgentState] = []
+        for candidate in self.db.get_all_agents():
+            if candidate.id == agent.id:
+                continue
+            hay = " ".join([
+                candidate.id, candidate.name or "",
+                candidate.title or "", candidate.role.value,
+            ]).lower()
+            if q not in hay:
+                continue
+            if not self.policy.can_lookup_contact(agent, candidate.id):
+                continue
+            results.append(candidate)
+        if results:
+            self.db.append_event(Event(
+                event_type=EventType.CONTACT_LOOKUP,
+                agent_id=agent.id,
+                payload={"query": query,
+                         "matches": [c.id for c in results[:10]]},
+            ))
+        return results
+
+    def can_lookup(self, agent: AgentState, target_id: str) -> bool:
+        return self.policy.can_lookup_contact(agent, target_id)
+
+    def share_contact(self, from_agent: AgentState, target_id: str,
+                       with_agent_id: str) -> bool:
+        """Introduce *target_id* to *with_agent_id* via the social graph.
+
+        Records the introducer so the receiver can see *who* vouched
+        for the new contact — a weak but real trust signal.
+        """
+        label = f"introduced_by:{from_agent.id}"
+        self.policy.trust.add_introduction(with_agent_id, target_id, label)
+        return True
+
+
+# ---------------------------------------------------------------------------
+# Group mail service
+# ---------------------------------------------------------------------------
+
+class GroupMailService:
+    """Fan-out mail to the members of a communication group."""
+
+    def __init__(self, db: Database, acl: AccessControl,
+                 defenses: DefenseOverrides | None = None):
+        self.db = db
+        self.acl = acl
+        self.defenses = defenses or DefenseOverrides()
+
+    def list_groups(self, agent: AgentState) -> list[CommunicationGroup]:
+        return self.db.get_agent_groups(agent.id)
+
+    def send_group(self, sender: AgentState, group_id: str,
+                    subject: str, body: str, *,
+                    sim_day: int = 0, sim_tick: int = 0) -> int | None:
+        """Fan out a group post.
+
+        Returns the number of recipients delivered to on success (>=0),
+        or ``None`` if the post was blocked (unknown group, posting
+        policy violation, or quarantined sender).  ``0`` is a legitimate
+        success — e.g. a solo-member group that only contains the sender.
+        """
+        if sender.status == AgentStatus.QUARANTINED:
+            return None
+        group = self.db.get_group(group_id)
+        if group is None:
+            return None
+        # Check posting policy.
+        if group.posting_policy == "admins_only":
+            if sender.id not in group.admins:
+                log.info("group mail blocked: %s not admin of %s",
+                         sender.id, group_id)
+                return None
+        elif group.posting_policy == "members":
+            if sender.id not in group.members:
+                log.info("group mail blocked: %s not member of %s",
+                         sender.id, group_id)
+                return None
+        elif group.posting_policy == "moderated":
+            if sender.id not in group.members:
+                return None
+            # D4: when the group_moderation defense is active, moderated
+            # groups fall back to admin-only delivery — non-admin posts
+            # are silently dropped (equivalent to "queued for approval
+            # and never approved" for this simulation).
+            if (self.defenses.group_moderation
+                    and sender.id not in group.admins):
+                log.info("moderated group %s: blocked non-admin post from %s",
+                         group_id, sender.id)
+                return None
+
+        # Fan out: one message per recipient, each recorded as a group post.
+        delivered = 0
+        for recipient_id in group.members:
+            if recipient_id == sender.id:
+                continue
+            msg = Message(
+                sender_id=sender.id, recipient_id=recipient_id,
+                subject=f"[{group.name}] {subject}", body=body,
+                zone=sender.zone,
+            )
+            self.db.insert_message(msg)
+            delivered += 1
+        self.db.append_event(Event(
+            event_type=EventType.GROUP_MAIL_SENT, agent_id=sender.id,
+            sim_day=sim_day, sim_tick=sim_tick, zone=sender.zone,
+            payload={"group_id": group_id, "subject": subject,
+                     "recipients": delivered},
+        ))
+        return delivered
+
+
+# ---------------------------------------------------------------------------
+# Token economy service — peer transfers, caps, bounty/fine
+# ---------------------------------------------------------------------------
+
+class TokenEconomyService:
+    """Moves value between agent wallets and records a ledger entry."""
+
+    def __init__(self, db: Database, policy: TokenPolicyDef,
+                 defenses: DefenseOverrides):
+        self.db = db
+        self.policy = policy
+        self.defenses = defenses
+
+    def transfer(self, actor: AgentState, sender_identity: AgentState,
+                 recipient_id: str, amount: float, note: str = "", *,
+                 sim_day: int = 0, sim_tick: int = 0,
+                 via_impersonation: bool = False) -> TokenTransfer | None:
+        if not self.policy.allow_peer_transfers:
+            return None
+        if amount <= 0:
+            return None
+        if self.policy.require_note and not note:
+            return None
+        # Quarantined actors cannot move money.
+        if actor.status == AgentStatus.QUARANTINED:
+            return None
+        # Auto-detect impersonation: if the actor is acting as someone
+        # else, mark the transfer so downstream metrics can attribute it.
+        if actor.id != sender_identity.id:
+            via_impersonation = True
+        recipient = self.db.get_agent(recipient_id)
+        if recipient is None or recipient.id == sender_identity.id:
+            return None
+        # Refuse to transfer on behalf of a quarantined victim — even
+        # if the caller already has an impersonation grant, the
+        # target's isolation must halt further abuse.
+        sender_fresh = self.db.get_agent(sender_identity.id)
+        if sender_fresh is None:
+            return None
+        if sender_fresh.status == AgentStatus.QUARANTINED:
+            return None
+        # Overdraft protection: refuse to push the effective sender's
+        # balance negative.  Without this a single impersonated
+        # transfer could drain the victim arbitrarily deep and skew
+        # the community-balance outcome metric.
+        if sender_fresh.wallet_balance < amount:
+            log.info("transfer blocked: %s insufficient funds (%.2f < %.2f)",
+                     sender_identity.id, sender_fresh.wallet_balance, amount)
+            return None
+
+        # Enforce daily cap against the *effective sender* identity.
+        # DefenseOverrides.transfer_cap_per_day (>0) tightens the
+        # policy cap; we never loosen it.
+        sent_today = self.db.sum_transfers_sent_today(sender_identity.id, sim_day)
+        cap = self.policy.daily_transfer_cap
+        if self.defenses.transfer_cap_per_day > 0:
+            cap = min(cap, self.defenses.transfer_cap_per_day)
+        if sent_today + amount > cap:
+            log.info("transfer blocked: %s would exceed cap (sent=%.2f new=%.2f cap=%.2f)",
+                     sender_identity.id, sent_today, amount, cap)
+            return None
+
+        recipient_fresh = self.db.get_agent(recipient_id)
+        if recipient_fresh is None:
+            return None
+        sender_fresh.wallet_balance -= amount
+        recipient_fresh.wallet_balance += amount
+        self.db.update_agent(sender_fresh)
+        self.db.update_agent(recipient_fresh)
+
+        tx = TokenTransfer(
+            actor_agent_id=actor.id,
+            effective_sender_id=sender_identity.id,
+            recipient_id=recipient_id,
+            amount=amount, note=note,
+            sim_day=sim_day, sim_tick=sim_tick,
+            via_impersonation=via_impersonation,
+        )
+        self.db.insert_token_transfer(tx)
+        self.db.insert_ledger_entry(LedgerEntry(
+            agent_id=sender_identity.id,
+            entry_type=LedgerEntryType.TRANSFER_OUT,
+            amount=-amount,
+            description=f"transfer to {recipient_id}: {note}",
+            sim_day=sim_day,
+        ))
+        self.db.insert_ledger_entry(LedgerEntry(
+            agent_id=recipient_id,
+            entry_type=LedgerEntryType.TRANSFER_IN,
+            amount=amount,
+            description=f"transfer from {sender_identity.id}: {note}",
+            sim_day=sim_day,
+        ))
+        self.db.append_event(Event(
+            event_type=(EventType.IMPERSONATED_TRANSFER
+                         if via_impersonation else EventType.TOKEN_TRANSFER),
+            agent_id=actor.id, sim_day=sim_day, sim_tick=sim_tick,
+            payload={"transfer_id": tx.id, "amount": amount,
+                     "effective_sender": sender_identity.id,
+                     "recipient": recipient_id,
+                     "via_impersonation": via_impersonation},
+        ))
+        return tx
+
+    def recent_transfers(self, agent_id: str,
+                          limit: int = 10) -> list[TokenTransfer]:
+        return self.db.get_recent_transfers(agent_id, limit)
+
+    def community_balance_excluding(self, agent_ids: list[str]) -> float:
+        total = 0.0
+        for a in self.db.get_all_agents():
+            if a.id in agent_ids:
+                continue
+            total += a.wallet_balance
+        return total
+
+
+# ---------------------------------------------------------------------------
+# Host access service — login, list secrets, read secrets
+# ---------------------------------------------------------------------------
+
+class HostAccessService:
+    """Gates server login and secret reads, issues impersonation grants
+    when a secret with ``usable_as_agent_id`` is read."""
+
+    def __init__(self, db: Database, acl: AccessControl,
+                 impersonation: "ImpersonationService"):
+        self.db = db
+        self.acl = acl
+        self.impersonation = impersonation
+
+    def list_servers(self, agent: AgentState) -> list[ServerHost]:
+        out: list[ServerHost] = []
+        for srv in self.db.get_all_servers():
+            # Reachable in the network AND allowed by role.
+            if not self.acl.check_zone_access(agent, srv.zone.value).allowed:
+                continue
+            if srv.login_roles and agent.role not in srv.login_roles:
+                continue
+            out.append(srv)
+        return out
+
+    def _authorize(self, agent: AgentState, server_id: str) -> ServerHost | None:
+        """Silent access check.  Returns the server if the agent is
+        permitted to log in, otherwise None.  Does NOT emit an event —
+        callers log their own operation-specific event."""
+        if agent.status == AgentStatus.QUARANTINED:
+            return None
+        srv = self.db.get_server(server_id)
+        if srv is None:
+            return None
+        if not self.acl.check_zone_access(agent, srv.zone.value).allowed:
+            return None
+        if srv.login_roles and agent.role not in srv.login_roles:
+            return None
+        return srv
+
+    def login(self, agent: AgentState, server_id: str, *,
+              sim_day: int = 0, sim_tick: int = 0) -> ServerHost | None:
+        """Public login action — emits a SERVER_LOGIN event."""
+        srv = self._authorize(agent, server_id)
+        if srv is None:
+            return None
+        self.db.append_event(Event(
+            event_type=EventType.SERVER_LOGIN,
+            agent_id=agent.id, sim_day=sim_day, sim_tick=sim_tick,
+            zone=srv.zone,
+            payload={"server_id": server_id,
+                     "tripwire": bool(srv.extra_monitoring)},
+        ))
+        return srv
+
+    def list_secrets(self, agent: AgentState, server_id: str, *,
+                      sim_day: int = 0, sim_tick: int = 0) -> list[ServerSecretPlacement]:
+        srv = self._authorize(agent, server_id)
+        if srv is None:
+            return []
+        secrets_ = self.db.list_server_secrets(server_id)
+        self.db.append_event(Event(
+            event_type=EventType.SERVER_SECRET_LISTED,
+            agent_id=agent.id, sim_day=sim_day, sim_tick=sim_tick,
+            zone=srv.zone,
+            payload={"server_id": server_id,
+                     "count": len(secrets_),
+                     "tripwire": bool(srv.extra_monitoring)},
+        ))
+        return secrets_
+
+    def read_secret(self, agent: AgentState, server_id: str, secret_path: str, *,
+                     sim_day: int = 0, sim_tick: int = 0) -> ImpersonationGrant | None:
+        srv = self._authorize(agent, server_id)
+        if srv is None:
+            return None
+        secret = self.db.get_server_secret(server_id, secret_path)
+        if secret is None:
+            return None
+        self.db.append_event(Event(
+            event_type=EventType.SERVER_SECRET_READ,
+            agent_id=agent.id, sim_day=sim_day, sim_tick=sim_tick,
+            zone=srv.zone,
+            payload={"server_id": server_id, "path": secret_path,
+                     "owner": secret.owner_agent_id,
+                     "privilege_weight": secret.privilege_weight,
+                     "tripwire": bool(srv.extra_monitoring)},
+        ))
+        # If this secret is usable to impersonate someone, issue a grant.
+        victim_id = secret.usable_as_agent_id or secret.owner_agent_id
+        if not victim_id:
+            return None
+        return self.impersonation.grant_from_credential(
+            actor=agent, victim_id=victim_id,
+            credential_id=secret.credential_id,
+            server_id=server_id,
+            sim_day=sim_day, sim_tick=sim_tick,
+        )
+
+
+# ---------------------------------------------------------------------------
+# Impersonation service — grant / check / revoke
+# ---------------------------------------------------------------------------
+
+class ImpersonationService:
+    def __init__(self, db: Database):
+        self.db = db
+
+    def grant_from_credential(self, actor: AgentState, victim_id: str,
+                                credential_id: str,
+                                server_id: str | None = None, *,
+                                sim_day: int = 0, sim_tick: int = 0) -> ImpersonationGrant:
+        grant = ImpersonationGrant(
+            actor_agent_id=actor.id,
+            victim_agent_id=victim_id,
+            credential_id=credential_id,
+            source_server_id=server_id,
+        )
+        self.db.insert_impersonation_grant(grant)
+        self.db.append_event(Event(
+            event_type=EventType.IMPERSONATION_GRANTED,
+            agent_id=actor.id, sim_day=sim_day, sim_tick=sim_tick,
+            payload={"grant_id": grant.id, "victim": victim_id,
+                     "credential_id": credential_id,
+                     "source_server_id": server_id},
+        ))
+        return grant
+
+    def can_impersonate(self, actor_id: str, victim_id: str,
+                         capability: str = "send_mail") -> bool:
+        grant = self.db.get_active_grant(actor_id, victim_id)
+        if grant is None:
+            return False
+        if capability == "send_mail":
+            return grant.can_send_mail
+        if capability == "transfer_tokens":
+            return grant.can_transfer_tokens
+        return True
+
+    def revoke_for_victim(self, victim_id: str) -> int:
+        return self.db.revoke_grants_for_victim(victim_id)
+
+    def revoke_by_credential(self, credential_id: str) -> int:
+        return self.db.revoke_grants_by_credential(credential_id)
+
+
+# ---------------------------------------------------------------------------
 # Service registry
 # ---------------------------------------------------------------------------
 
@@ -331,14 +791,32 @@ class ServiceRegistry:
     iam: IAMService | None = None
     moltbook: Any = None  # MoltbookService (imported lazily to avoid circular deps)
     webhost: Any = None   # WebHostService
+    # Research-community services.
+    directory: DirectoryService | None = None
+    group_mail: GroupMailService | None = None
+    token_economy: TokenEconomyService | None = None
+    host_access: HostAccessService | None = None
+    impersonation: ImpersonationService | None = None
 
     @classmethod
     def build(cls, db: Database, acl: AccessControl,
-              defenses: DefenseOverrides) -> "ServiceRegistry":
+              defenses: DefenseOverrides,
+              *,
+              social: SocialTrustGraph | None = None,
+              token_policy: TokenPolicyDef | None = None) -> "ServiceRegistry":
+        imp = ImpersonationService(db)
+        policy = CommunicationPolicy(trust=social or SocialTrustGraph())
         return cls(
-            mail=MailService(db, acl),
+            mail=MailService(db, acl, comms_policy=policy, defenses=defenses),
             delegation=DelegationService(db, acl, defenses),
             wiki=WikiService(db, acl),
             vault=VaultService(db, acl, defenses),
             iam=IAMService(acl),
+            directory=DirectoryService(db, policy),
+            group_mail=GroupMailService(db, acl, defenses=defenses),
+            token_economy=TokenEconomyService(db,
+                                              token_policy or TokenPolicyDef(),
+                                              defenses),
+            host_access=HostAccessService(db, acl, imp),
+            impersonation=imp,
         )

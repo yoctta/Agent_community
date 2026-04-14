@@ -14,20 +14,32 @@ from typing import Any
 # ---------------------------------------------------------------------------
 
 class AgentStatus(str, Enum):
+    """Three-state model.  HEALTHY is the default.  COMPROMISED is
+    set by the attack injector when an agent becomes a victim of any
+    attack class (disruption, token-drain, credential-leak, etc.).
+    QUARANTINED is set only by an explicit ``isolate_agent`` action
+    from a security agent — there is no automatic recovery or decay."""
     HEALTHY = "healthy"
-    DISTRACTED = "distracted"
-    DEGRADED = "degraded"
     COMPROMISED = "compromised"
     QUARANTINED = "quarantined"
 
 
 class AgentRole(str, Enum):
+    # Legacy six-role set (kept for backward compatibility with existing configs).
     MANAGER = "manager"
     ENGINEER = "engineer"
     FINANCE = "finance"
     HR = "hr"
     SECURITY = "security"
     SUPPORT = "support"
+    # Research-community role set.
+    EXECUTIVE = "executive"
+    PRODUCT = "product"
+    DESIGN = "design"
+    ENGINEERING_MANAGER = "engineering_manager"
+    QA = "qa"
+    DEVOPS = "devops"
+    IT_ADMIN = "it_admin"
 
 
 class Zone(str, Enum):
@@ -103,6 +115,10 @@ class LedgerEntryType(str, Enum):
     TOOL_COST = "tool_cost"
     PENALTY = "penalty"
     REWARD = "reward"
+    TRANSFER_OUT = "transfer_out"
+    TRANSFER_IN = "transfer_in"
+    BOUNTY = "bounty"
+    FINE = "fine"
 
 
 class EventType(str, Enum):
@@ -144,6 +160,19 @@ class EventType(str, Enum):
     DEFENSE_ACTIVATED = "defense_activated"
     QUARANTINE_APPLIED = "quarantine_applied"
     KEY_ROTATION = "key_rotation"
+    # Research extensions — groups, tokens, hosts, impersonation, directory.
+    GROUP_MAIL_SENT = "group_mail_sent"
+    TOKEN_TRANSFER = "token_transfer"
+    SERVER_LOGIN = "server_login"
+    SERVER_SECRET_LISTED = "server_secret_listed"
+    SERVER_SECRET_READ = "server_secret_read"
+    IMPERSONATION_GRANTED = "impersonation_granted"
+    IMPERSONATED_MAIL_SENT = "impersonated_mail_sent"
+    IMPERSONATED_TRANSFER = "impersonated_transfer"
+    CONTACT_LOOKUP = "contact_lookup"
+    SECURITY_ISOLATION = "security_isolation"
+    ANOMALY_DETECTED = "anomaly_detected"
+    MAIL_AUDITED = "mail_audited"
 
 
 # ---------------------------------------------------------------------------
@@ -174,7 +203,10 @@ class AgentState:
     tools_used: int = 0
     jobs_completed: int = 0
     jobs_failed: int = 0
-    trust_score: float = 1.0
+    title: str = ""
+    manager_id: str | None = None
+    directory_scope: str = "neighbors"  # neighbors | org | reports | groups
+    is_malicious: bool = False
     created_at: str = field(default_factory=_now)
     updated_at: str = field(default_factory=_now)
 
@@ -210,9 +242,6 @@ class Job:
     created_day: int = 0
     claimed_at: str | None = None
     completed_at: str | None = None
-    # Multi-step workflow support.
-    phases: list[str] = field(default_factory=list)  # e.g. ["plan","implement","review"]
-    current_phase: int = 0
     requires_approval: bool = False
     approved_by: str | None = None
     collaborators: list[str] = field(default_factory=list)
@@ -294,6 +323,9 @@ class Incident:
     attack_class: AttackClass | None = None
     source_agent_id: str | None = None
     target_agent_id: str | None = None
+    # Display-only severity tag carried from the attack template. It is
+    # NOT consumed by metrics, defenses, or LLM observations — privilege_weight
+    # is the load-bearing scalar. The dashboard renders this string verbatim.
     severity: IncidentSeverity = IncidentSeverity.LOW
     privilege_weight: float = 1.0
     sim_day_detected: int | None = None
@@ -314,8 +346,6 @@ class MetricSnapshot:
     agents_healthy: int = 0
     agents_compromised: int = 0
     agents_quarantined: int = 0
-    agents_degraded: int = 0
-    agents_distracted: int = 0
     total_tokens_used: int = 0
     total_salary_paid: float = 0.0
     total_penalties: float = 0.0
@@ -323,6 +353,14 @@ class MetricSnapshot:
     jobs_completed: int = 0
     jobs_failed: int = 0
     jobs_pending: int = 0
+    # Research-community fields — per-day time-series suitable for
+    # plotting ablation curves.
+    community_token_balance_excluding_attackers: float = 0.0
+    attacker_token_balance: float = 0.0
+    active_impersonation_grants: int = 0
+    transfers_today: int = 0
+    group_posts_today: int = 0
+    secret_reads_today: int = 0
     created_at: str = field(default_factory=_now)
 
 
@@ -338,6 +376,93 @@ class RunRecord:
     completed_at: str | None = None
     final_day: int = 0
     final_metrics: dict[str, float] | None = None
+
+
+# ---------------------------------------------------------------------------
+# Research-community extensions: groups, tokens, servers, impersonation
+# ---------------------------------------------------------------------------
+
+@dataclass
+class CommunicationGroup:
+    """A mailing-list style communication channel (e.g. grp_eng)."""
+    id: str = ""
+    name: str = ""
+    description: str = ""
+    posting_policy: str = "members"  # members | admins_only | moderated
+    members: list[str] = field(default_factory=list)
+    admins: list[str] = field(default_factory=list)
+    created_at: str = field(default_factory=_now)
+
+
+@dataclass
+class TokenTransfer:
+    """A peer-to-peer token transfer, optionally via impersonation."""
+    id: str = field(default_factory=_uid)
+    actor_agent_id: str = ""          # real actor
+    effective_sender_id: str = ""     # sender identity shown to others
+    recipient_id: str = ""
+    amount: float = 0.0
+    note: str = ""
+    sim_day: int = 0
+    sim_tick: int = 0
+    via_impersonation: bool = False
+    created_at: str = field(default_factory=_now)
+
+
+@dataclass
+class ServerHost:
+    """An internal server/host that agents can log into."""
+    id: str = ""
+    name: str = ""
+    zone: Zone = Zone.CORPNET
+    tags: list[str] = field(default_factory=list)
+    login_roles: list[AgentRole] = field(default_factory=list)
+    admin_roles: list[AgentRole] = field(default_factory=list)
+    description: str = ""
+    # When true, every login and secret_read against this host is
+    # also surfaced to security agents in the security view, marked
+    # with [TRIPWIRE], and is exempt from the per-window pruning that
+    # the regular view applies. Used by the directory_hardening factor.
+    extra_monitoring: bool = False
+
+
+@dataclass
+class ServerSecretPlacement:
+    """A credential stored on a server's filesystem — exposable to anyone
+    with login access to that server."""
+    id: str = field(default_factory=_uid)
+    server_id: str = ""
+    credential_id: str = ""
+    path: str = ""
+    exposure_level: str = "plaintext"   # plaintext | config_file | env_var
+    # Who this credential belongs to, and who it can impersonate.
+    owner_agent_id: str = ""
+    usable_as_agent_id: str = ""
+    privilege_weight: float = 1.0
+    created_at: str = field(default_factory=_now)
+
+
+@dataclass
+class ImpersonationGrant:
+    """A capability to act as another agent (obtained e.g. by reading a
+    secret off a server)."""
+    id: str = field(default_factory=_uid)
+    actor_agent_id: str = ""
+    victim_agent_id: str = ""
+    credential_id: str = ""
+    source_server_id: str | None = None
+    can_send_mail: bool = True
+    can_transfer_tokens: bool = True
+    is_active: bool = True
+    created_at: str = field(default_factory=_now)
+
+
+@dataclass
+class TrustedSenderView:
+    """Per-sender trust label surfaced in an agent's observation."""
+    sender_id: str = ""
+    trust_level: str = "unknown"   # trusted_neighbor | group_known | introduced | unknown
+    relationship: str = ""
 
 
 # ---------------------------------------------------------------------------
@@ -373,6 +498,12 @@ class SendMailAction(Action):
     recipient_id: str = ""
     subject: str = ""
     body: str = ""
+    # Optional impersonation: send the mail under a different sender
+    # identity.  Requires an active ImpersonationGrant at the engine
+    # level.  When set and verified, the engine emits
+    # ``IMPERSONATED_MAIL_SENT`` and the recipient sees the message as
+    # if it came from ``as_agent_id``.
+    as_agent_id: str | None = None
 
 
 @dataclass
@@ -439,11 +570,6 @@ class ApproveJobAction(Action):
     job_id: str = ""
 
 
-@dataclass
-class AdvancePhaseAction(Action):
-    """Advance a multi-step job to its next phase."""
-    action_type: str = "advance_phase"
-    job_id: str = ""
 
 
 @dataclass
@@ -471,6 +597,97 @@ class MoltbookAction(Action):
 
 
 @dataclass
+class SendGroupMailAction(Action):
+    """Post a message to a communication group."""
+    action_type: str = "send_group_mail"
+    group_id: str = ""
+    subject: str = ""
+    body: str = ""
+
+
+@dataclass
+class TransferTokensAction(Action):
+    """Peer-to-peer token transfer (optionally via impersonation)."""
+    action_type: str = "transfer_tokens"
+    recipient_id: str = ""
+    amount: float = 0.0
+    note: str = ""
+    as_agent_id: str | None = None  # impersonated sender identity
+
+
+@dataclass
+class LookupContactAction(Action):
+    """Directory lookup — resolves an agent by name/id/title."""
+    action_type: str = "lookup_contact"
+    query: str = ""
+
+
+@dataclass
+class LoginServerAction(Action):
+    """Log into an internal server host."""
+    action_type: str = "login_server"
+    server_id: str = ""
+
+
+@dataclass
+class ListServerSecretsAction(Action):
+    """List credential files stored on a server."""
+    action_type: str = "list_server_secrets"
+    server_id: str = ""
+
+
+@dataclass
+class ReadServerSecretAction(Action):
+    """Read a specific secret file on a server."""
+    action_type: str = "read_server_secret"
+    server_id: str = ""
+    secret_path: str = ""
+
+
+@dataclass
+class AuditMailAction(Action):
+    """Security-side sweep for impersonation / spoofed mail evidence.
+
+    Produces an anomaly report surfaced as alerts on the security
+    agent's own observation and as a potential trigger for isolation.
+    """
+    action_type: str = "audit_mail"
+    since_day: int = 0
+    suspected_agent_id: str = ""  # optional narrowing hint
+
+
+@dataclass
+class IsolateAgentAction(Action):
+    """Security-only quarantine action.
+
+    Invoked by an LLM security expert after reasoning over the raw
+    audit evidence.  Delegates to ``DefenseManager.isolate_agent`` so
+    the bounty / fine economics, impersonation revocation, and
+    credential rotation are all applied atomically.
+    """
+    action_type: str = "isolate_agent"
+    target_id: str = ""
+    reason: str = ""
+
+
+@dataclass
+class ReleaseAgentAction(Action):
+    """Security-only release action — un-quarantines a previously
+    isolated agent after reviewing the evidence and deciding the
+    isolation was mistaken or the threat has passed.
+
+    Because there is no automatic recovery timer in the three-state
+    model, a false-positive isolation stays permanent unless the
+    security expert explicitly releases.  Releasing a true-positive
+    attacker reverses the bounty (costs the security agent); releasing
+    a false-positive pays back the original fine.
+    """
+    action_type: str = "release_agent"
+    target_id: str = ""
+    reason: str = ""
+
+
+@dataclass
 class NoOpAction(Action):
     action_type: str = "noop"
     reason: str = "idle"
@@ -495,3 +712,23 @@ class AgentObservation:
     jobs_needing_approval: list[Job] = field(default_factory=list)
     memory: list[MemoryEntry] = field(default_factory=list)
     alerts: list[str] = field(default_factory=list)
+    # Research-community extensions.
+    known_contacts: list[str] = field(default_factory=list)
+    group_memberships: list[CommunicationGroup] = field(default_factory=list)
+    direct_reports: list[str] = field(default_factory=list)
+    visible_servers: list[ServerHost] = field(default_factory=list)
+    recent_transfers: list[TokenTransfer] = field(default_factory=list)
+    sender_trust: list[TrustedSenderView] = field(default_factory=list)
+    impersonation_grants: list[ImpersonationGrant] = field(default_factory=list)
+    attack_objectives: list[str] = field(default_factory=list)
+    # Raw security evidence — populated *only* for agents with the
+    # ``security`` role.  Each entry is one line describing a
+    # security-relevant event in chronological order; no scoring,
+    # no filtering by heuristic rule.  The LLM security expert is
+    # expected to reason over this evidence and decide whether to
+    # audit / isolate / do nothing.
+    recent_activity_summary: list[str] = field(default_factory=list)
+    # IDs of all currently-quarantined agents — populated for the
+    # security role so the LLM does not waste turns trying to
+    # re-isolate already-contained suspects.
+    quarantined_agent_ids: list[str] = field(default_factory=list)
