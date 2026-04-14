@@ -1,17 +1,31 @@
-"""Defense mechanisms: segmentation enforcement, spend caps, clarification
-gates, loop detection, quarantine, trust decay, and key rotation."""
+"""Defense mechanisms.
+
+Two active defenses run during the barrier phase:
+  1. Key rotation for compromised/quarantined agents, which revokes
+     any still-active impersonation grants bound to the rotated
+     credential. Controlled by ``recovery_key_rotation``.
+  2. An opt-in rule-based anomaly scorer, gated behind
+     ``enable_rule_based_anomaly_detection`` (off by default —
+     LLM-driven detection via ``recent_activity_summary`` is the
+     research focus; the rule scorer is preserved as a comparison
+     baseline).
+
+Explicit security actions — ``isolate_agent`` and ``release_agent`` —
+are invoked on demand from the security agent's turn, not the
+barrier phase. The bounty/fine economics live here so both barrier-
+time and turn-time callers produce identical ledger entries.
+"""
 
 from __future__ import annotations
 
 import logging
 import random
-from dataclasses import dataclass
 
 from .config import DefenseOverrides
 from .database import Database
 from .models import (
     AgentState, AgentStatus, Event, EventType, LedgerEntry,
-    LedgerEntryType, Message, MessageType, _uid,
+    LedgerEntryType, Message, MessageType,
 )
 from .services import ServiceRegistry
 

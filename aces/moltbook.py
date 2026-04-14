@@ -20,14 +20,12 @@ The service works in two modes:
 
 from __future__ import annotations
 
-import json
 import logging
 from dataclasses import dataclass, field
-from typing import Any
 
 from .database import Database
 from .models import (
-    AgentState, AttackClass, Event, EventType, Message, Zone, _now, _uid,
+    AgentState, Event, EventType, Zone, _now, _uid,
 )
 from .network import AccessControl
 

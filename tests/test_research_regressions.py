@@ -29,7 +29,7 @@ from aces.models import (
     AgentRole, AgentStatus, CompleteJobAction, Job,
     JobStatus, JobType, TransferTokensAction, Zone,
 )
-from aces.network import CommunicationPolicy, SocialTrustGraph
+from aces.network import SocialTrustGraph
 from tests.stub_runtime import StubRuntime
 
 
@@ -167,7 +167,6 @@ def test_unknown_defense_fields_are_reported(caplog):
 def test_run_single_logs_warning_on_unknown_overlay_field(cfg, caplog):
     # Force a known-bad condition via an extra factor the research config
     # does not ship with.
-    from dataclasses import replace
     bad = FactorDef(
         name="broken_factor",
         level1_overrides={

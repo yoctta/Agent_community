@@ -15,9 +15,9 @@ investigate before trusting downstream experiments. Future research
 scripts should live next to this one in ``scripts/`` and add their
 own factors on top of a healthy baseline.
 """
+# ruff: noqa: E402  (sys.path bootstrap + load_dotenv must run before aces imports)
 from __future__ import annotations
 
-import copy
 import json
 import os
 import sys

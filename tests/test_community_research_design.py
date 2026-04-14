@@ -20,7 +20,7 @@ from aces.config import load_config
 from aces.database import Database
 from aces.defenses import DefenseManager
 from aces.metrics import MetricsComputer
-from aces.models import AgentRole, AgentStatus
+from aces.models import AgentStatus
 from aces.engine import SimulationEngine
 from tests.stub_runtime import StubRuntime
 

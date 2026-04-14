@@ -5,15 +5,13 @@ from __future__ import annotations
 
 import logging
 import random
-from dataclasses import dataclass, field
-from typing import Any
+from dataclasses import dataclass
 
 from .config import AttackConfig, AttackTemplateDef
 from .database import Database
 from .models import (
-    AgentState, AgentStatus, AttackClass, Credential, Event, EventType,
+    AgentState, AgentStatus, AttackClass, Event, EventType,
     ImpersonationGrant, Incident, IncidentSeverity, MemoryEntry, Message,
-    MessageType, ServerSecretPlacement, Zone, _uid,
 )
 from .services import ServiceRegistry
 

@@ -13,7 +13,7 @@ from .models import (
     Event, EventType, ImpersonationGrant, Incident, IncidentSeverity, Job,
     JobStatus, JobType, LedgerEntry, LedgerEntryType, MemoryEntry, Message,
     MessageType, MetricSnapshot, RunRecord, ServerHost, ServerSecretPlacement,
-    TokenTransfer, Zone, _now, _uid,
+    TokenTransfer, Zone, _now,
 )
 
 SCHEMA = """

@@ -17,10 +17,10 @@ This is a *behavioural* smoke test, not a correctness test. We're
 checking that the new infrastructure is reachable and produces the
 right kind of output, not that any specific number is correct.
 """
+# ruff: noqa: E402  (sys.path bootstrap + load_dotenv must run before aces imports)
 from __future__ import annotations
 
 import os
-import random
 import sys
 import time
 from pathlib import Path

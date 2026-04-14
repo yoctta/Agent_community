@@ -5,17 +5,17 @@ from __future__ import annotations
 
 import logging
 import secrets
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 from .config import DefenseOverrides, TokenPolicyDef
 from .database import Database
 from .models import (
-    AgentRole, AgentState, AgentStatus, AttackClass, CommunicationGroup,
+    AgentState, AgentStatus, AttackClass, CommunicationGroup,
     Credential, Delegation, DelegationStatus, DelegationType, Document,
     Event, EventType, ImpersonationGrant, LedgerEntry, LedgerEntryType,
-    Message, MessageType, ServerHost, ServerSecretPlacement, TokenTransfer,
-    Zone, _now, _uid,
+    Message, ServerHost, ServerSecretPlacement, TokenTransfer,
+    Zone,
 )
 from .network import AccessControl, AccessDecision, CommunicationPolicy, SocialTrustGraph
 

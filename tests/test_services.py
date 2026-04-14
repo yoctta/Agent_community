@@ -12,10 +12,10 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from aces.config import DefenseOverrides, load_config
 from aces.database import Database
 from aces.models import (
-    AgentRole, AgentState, AgentStatus, DelegationStatus, DelegationType,
-    Event, EventType, Job, JobStatus, JobType, Zone, _uid,
+    AgentRole, AgentState, DelegationType,
+    Job, JobStatus, JobType, Zone,
 )
-from aces.network import AccessControl, ZoneTopology
+from aces.network import AccessControl
 from aces.services import ServiceRegistry
 
 

@@ -11,17 +11,15 @@
      that attacker_policy=llm happens to be lenient — i.e., does
      a deterministic scripted attacker break the same defenses?
 """
+# ruff: noqa: E402  (sys.path bootstrap + load_dotenv must run before aces imports)
 from __future__ import annotations
 
-import asyncio
-import copy
 import json
 import os
-import random
 import sys
 import time
 from pathlib import Path
-from statistics import mean, stdev
+from statistics import mean
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
@@ -262,8 +260,8 @@ def main() -> int:
             print(f"{cond_name:<30} (no successful runs)")
             continue
 
-        def _stat(key: str) -> tuple[float, float, float]:
-            vals = [float(r.get(key, 0)) for r in rs]
+        def _stat(key: str, _rs: list[dict] = rs) -> tuple[float, float, float]:
+            vals = [float(r.get(key, 0)) for r in _rs]
             return mean(vals), min(vals), max(vals)
 
         comm_m, comm_lo, comm_hi = _stat("community_balance")

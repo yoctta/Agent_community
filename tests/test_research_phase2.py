@@ -21,7 +21,7 @@ from aces.defenses import DefenseManager
 from aces.engine import SimulationEngine
 from aces.metrics import MetricsComputer
 from aces.models import (
-    AgentStatus, EventType, LedgerEntryType, SendMailAction,
+    EventType, LedgerEntryType, SendMailAction,
 )
 from tests.stub_runtime import StubRuntime
 

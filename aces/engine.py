@@ -7,7 +7,7 @@ import json
 import logging
 import os
 import random
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 from .config import ACESConfig, DefenseOverrides, EnterpriseConfig
@@ -17,13 +17,13 @@ from .models import (
     AgentState, AgentStatus, AgentRole, ApproveJobAction, ClaimJobAction,
     AuditMailAction, CommunicationGroup, CompleteJobAction, DelegateAction,
     DelegationType, Event, EventType, FailJobAction, ImpersonationGrant,
-    IsolateAgentAction, Job, JobStatus, JobType, LedgerEntry, LedgerEntryType,
+    IsolateAgentAction, Job, JobType, LedgerEntry, LedgerEntryType,
     ListServerSecretsAction, LoginServerAction, LookupContactAction,
-    MemoryEntry, Message, MessageType, MetricSnapshot, MoltbookAction,
+    MemoryEntry, Message, MessageType, MoltbookAction,
     NoOpAction, ReadDocAction, ReadServerSecretAction, ReleaseAgentAction,
     RespondDelegationAction, RunRecord, SendGroupMailAction, SendMailAction,
     ServerHost, ServerSecretPlacement, TransferTokensAction, TrustedSenderView,
-    UpdateDocAction, WebHostBrowseAction, WebHostSSHAction, Zone, _now, _uid,
+    UpdateDocAction, WebHostBrowseAction, WebHostSSHAction, Zone, _now,
 )
 from .network import AccessControl, CommunicationPolicy, SocialTrustGraph
 from .runtime import AgentRuntime
@@ -475,9 +475,6 @@ class TurnManager:
                         sim_day: int, sim_tick: int,
                         all_agents: list[AgentState]) -> tuple[bool, int, int]:
         """Execute *action*. Returns (success, tokens_spent, tools_used)."""
-        tokens = 0
-        tools = 0
-
         if isinstance(action, NoOpAction):
             return True, 0, 0
 
@@ -1409,7 +1406,7 @@ class SimulationEngine:
         # Phase C — apply in deterministic order.  Refresh inside
         # ``TurnManager.apply`` will pick up any wallet/status changes
         # committed by earlier agents in this same tick.
-        for (fresh, _), actions in zip(snapshots, action_lists):
+        for (fresh, _), actions in zip(snapshots, action_lists, strict=True):
             self.turn_mgr.apply(
                 fresh, actions, day, tick, agents,
             )

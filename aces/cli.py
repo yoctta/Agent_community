@@ -42,7 +42,7 @@ def _resolve_paths(args: argparse.Namespace) -> tuple[str, str, str]:
         r if cur == d else cur
         for cur, d, r in zip(
             (args.enterprise, args.experiment, args.attacks),
-            defaults, research,
+            defaults, research, strict=True,
         )
     ]
     return picked[0], picked[1], picked[2]
@@ -78,7 +78,7 @@ def cmd_run(args: argparse.Namespace) -> None:
     _apply_cfg(cfg, args)
 
     runner = ExperimentRunner(cfg, args.output)
-    results = runner.run()
+    runner.run()
 
     print("\n" + "=" * 90)
     print("EXPERIMENT RESULTS")

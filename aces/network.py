@@ -5,8 +5,8 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 
-from .config import DefenseOverrides, EnterpriseConfig, ZoneDef, ZoneLink
-from .models import AgentRole, AgentState, AgentStatus, Zone
+from .config import DefenseOverrides, EnterpriseConfig, ZoneLink
+from .models import AgentState, AgentStatus, Zone
 
 log = logging.getLogger(__name__)
 

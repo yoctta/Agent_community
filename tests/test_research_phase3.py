@@ -376,7 +376,6 @@ def test_security_view_annotates_actor_with_role(engine):
     actors as ``agent_id[role]`` so the LLM can distinguish routine
     admin-on-own-zone from an intrusion."""
     # Force a server login by exec_james (COO).
-    from aces.models import AgentState, AgentStatus
     tom = engine.db.get_agent("exec_james")
     engine.services.host_access.login(
         tom, "srv_payroll_app", sim_day=1, sim_tick=1,

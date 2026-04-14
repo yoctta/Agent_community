@@ -18,13 +18,13 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from tests.stub_runtime import StubRuntime
 
 from aces.config import (
-    ACESConfig, DefenseOverrides, ExperimentConfig, FactorDef,
+    DefenseOverrides, FactorDef,
     load_config, apply_condition_overrides,
 )
 from aces.database import Database
 from aces.models import (
     AgentRole, AgentState, AgentStatus, Event, EventType, Job,
-    JobStatus, JobType, Zone, _uid,
+    JobStatus, JobType, Zone,
 )
 from aces.network import AccessControl, ZoneTopology
 from aces.experiment import (
@@ -201,7 +201,6 @@ class TestBugFixes(unittest.TestCase):
         from aces.config import DefenseOverrides
         from aces.defenses import DefenseManager
         from aces.services import ServiceRegistry
-        from aces.network import AccessControl
         import random
 
         db = Database(":memory:")
@@ -264,7 +263,6 @@ class TestBugFixes(unittest.TestCase):
     def test_cross_zone_job_visibility(self):
         """Managers in corpnet should see jobs in zones they can reach."""
         from aces.database import Database
-        from aces.network import AccessControl, ZoneTopology
         from aces.config import DefenseOverrides
         from aces.engine import TurnManager
         from aces.services import ServiceRegistry

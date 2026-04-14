@@ -16,15 +16,13 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from aces.config import DefenseOverrides, FactorDef, load_config
+from aces.config import load_config
 from aces.database import Database
 from aces.defenses import DefenseManager
 from aces.engine import SimulationEngine
 from aces.metrics import MetricsComputer
 from aces.models import (
-    AgentRole, AgentStatus, AuditMailAction, CompleteJobAction,
-    EventType, Job, JobStatus, JobType, NoOpAction, SendMailAction,
-    TransferTokensAction, Zone,
+    AgentStatus, AuditMailAction, EventType, NoOpAction, SendMailAction,
 )
 from tests.stub_runtime import StubRuntime
 
@@ -566,7 +564,7 @@ def test_tripwire_events_marked_and_preserved_in_security_view(db, cfg):
     )
     tripwire_lines = [line for line in view if "[TRIPWIRE]" in line]
     assert len(tripwire_lines) == 1, (
-        f"expected tripwire entry preserved outside window, got view:\n"
+        "expected tripwire entry preserved outside window, got view:\n"
         + "\n".join(view))
     assert "srv_identity_admin" in tripwire_lines[0]
 

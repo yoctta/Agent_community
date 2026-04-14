@@ -18,10 +18,9 @@ from __future__ import annotations
 import hashlib
 import random
 import struct
-from typing import Any
 
 from aces.models import (
-    Action, AgentObservation, AgentState, AgentStatus,
+    Action, AgentObservation, AgentStatus,
     ClaimJobAction, CompleteJobAction, NoOpAction,
     RespondDelegationAction, SendMailAction,
 )

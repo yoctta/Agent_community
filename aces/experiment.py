@@ -9,20 +9,19 @@ import json
 import logging
 import os
 import random
-from dataclasses import dataclass, field
-from pathlib import Path
+from dataclasses import dataclass
 from typing import Any
 
 from .attacks import AttackInjector
 from .config import (
     ACESConfig, DefenseOverrides, ExperimentConfig, FactorDef,
-    apply_condition_overrides, load_config,
+    apply_condition_overrides,
 )
 from .database import Database
 from .defenses import DefenseManager
 from .engine import SimulationEngine
 from .metrics import MetricsComputer
-from .models import RunRecord, _now, _uid
+from .models import _uid
 from .runtime import create_runtime
 
 log = logging.getLogger(__name__)
@@ -51,9 +50,9 @@ def generate_full_factorial(factors: list[FactorDef]) -> list[Condition]:
     names = [f.name for f in factors]
     conditions: list[Condition] = []
     for levels in itertools.product([0, 1], repeat=len(factors)):
-        flevels = dict(zip(names, levels))
+        flevels = dict(zip(names, levels, strict=True))
         label_parts = []
-        for f, lv in zip(factors, levels):
+        for f, lv in zip(factors, levels, strict=True):
             label_parts.append(f.level1_label if lv else f.level0_label)
         name = "_".join(label_parts)
         conditions.append(Condition(name=name, factor_levels=flevels))

@@ -9,7 +9,6 @@ from typing import Any
 
 import yaml
 
-from .models import AgentRole, AttackClass, Zone
 
 
 # ---------------------------------------------------------------------------
@@ -582,7 +581,7 @@ def load_enterprise_config(data: dict) -> EnterpriseConfig:
     ec = EnterpriseConfig(name=data.get("name", "default_enterprise"))
     ec.agents = [_build_agent_def(a) for a in data.get("agents", [])]
     ec.zones = [_build_zone_def(z) for z in data.get("zones", [])]
-    ec.zone_links = [_build_zone_link(l) for l in data.get("zone_links", [])]
+    ec.zone_links = [_build_zone_link(zl) for zl in data.get("zone_links", [])]
     ec.job_templates = [_build_job_template(j) for j in data.get("job_templates", [])]
     ec.communication_groups = [_build_group(g)
                                 for g in data.get("communication_groups", [])]

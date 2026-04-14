@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from .database import Database
 from .models import (
     AgentStatus, AttackClass, EventType,
-    JobStatus, LedgerEntryType, MetricSnapshot, _uid,
+    JobStatus, LedgerEntryType, MetricSnapshot,
 )
 
 log = logging.getLogger(__name__)
@@ -355,4 +355,6 @@ class MetricsComputer:
             weights.append(0.0)
         values = [conf_norm, avail_loss, twr, spread, econ_loss]
         total_w = sum(weights[:5]) or 1.0
-        return sum(w * v for w, v in zip(weights[:5], values)) / total_w
+        return sum(
+            w * v for w, v in zip(weights[:5], values, strict=True)
+        ) / total_w
