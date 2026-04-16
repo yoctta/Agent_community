@@ -106,27 +106,30 @@ def test_async_engine_runs_a_day(db, cfg):
     assert "community_token_balance_excluding_attackers" in record.final_metrics
 
 
-def test_async_engine_equivalent_to_sync_for_same_seed(cfg):
-    """With the stub runtime (deterministic) the async and sync paths
-    produce the same final metrics on short runs.
+def test_async_engine_runs_inner_loop_and_beats_sync(cfg):
+    """The async engine now runs a per-agent **inner action loop** per
+    tick (observe → decide → execute → observe → ... until noop),
+    while the sync engine keeps the legacy one-shot-per-tick path.
 
-    The two-phase async tick has a slightly stricter semantic than
-    the serial tick: an agent's observation reflects the world at
-    tick start, not mid-tick mutations from earlier agents in the
-    same tick.  Over a single day this distinction is invisible
-    (no agent can cascade to another), so headline metrics match
-    exactly.  Over multi-day runs with heavy cross-agent mail cascades
-    the two paths can diverge by <1% on headline metrics — this is
-    intentional and documented in docs/research_scenarios.md.
+    The two are intentionally no longer equivalent: the async path
+    gives agents more chances to act within a single tick. With the
+    stub runtime that returns a deterministic batch per call, the
+    async path's per-tick action count should be strictly greater
+    than or equal to the sync path's, because the inner loop invokes
+    decide() multiple times per tick.
+
+    This test replaces an older equivalence check that was
+    architecturally invalidated when ticks stopped being hard action
+    limits and became message/concurrency barriers only.
     """
     cfg.attacks.enabled_classes = []  # disable attacks for a clean comparison
 
-    def _run(use_async: bool) -> dict:
+    def _run(use_async: bool) -> tuple[dict, int]:
         db = Database(":memory:")
         engine = SimulationEngine(
             cfg=cfg, db=db,
             runtime=StubRuntime(rng=random.Random(13)),
-            run_id=("async" if use_async else "sync") + "-equiv",
+            run_id=("async" if use_async else "sync") + "-loop",
             rng=random.Random(13),
         )
         engine.metrics_computer = MetricsComputer(
@@ -139,16 +142,25 @@ def test_async_engine_equivalent_to_sync_for_same_seed(cfg):
         else:
             record = engine.run(days=1)
         m = record.final_metrics or {}
+        turn_end_actions = sum(
+            (e.payload or {}).get("actions", 0)
+            for e in db.get_events(event_type="agent_turn_end")
+        )
         db.close()
-        return m
+        return m, turn_end_actions
 
-    sync_metrics = _run(False)
-    async_metrics = _run(True)
-    assert sync_metrics["community_token_balance_excluding_attackers"] == \
-           pytest.approx(
-               async_metrics["community_token_balance_excluding_attackers"])
-    assert sync_metrics["attacker_token_balance"] == \
-           pytest.approx(async_metrics["attacker_token_balance"])
+    sync_metrics, sync_actions = _run(False)
+    async_metrics, async_actions = _run(True)
+    # Both paths must complete and produce headline metrics.
+    assert "community_token_balance_excluding_attackers" in sync_metrics
+    assert "community_token_balance_excluding_attackers" in async_metrics
+    # The async inner-loop path should execute at least as many
+    # actions per run as the sync one-shot path. In practice it is
+    # strictly more, but we only require >= so the test stays robust
+    # across stub-runtime changes.
+    assert async_actions >= sync_actions, (
+        f"inner loop should execute at least as many actions as "
+        f"one-shot (async={async_actions}, sync={sync_actions})")
 
 
 # ---------------------------------------------------------------------------

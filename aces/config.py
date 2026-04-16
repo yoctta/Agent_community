@@ -245,7 +245,24 @@ class EnterpriseConfig:
     token_cost_per_1k: float = 0.50
     tool_cost_per_call: float = 0.10
     ticks_per_day: int = 6
-    max_actions_per_tick: int = 3
+    # Maximum ACES actions the LLM may emit **per inner-loop
+    # iteration**. A tick is no longer a hard action budget — the
+    # async engine runs a per-agent inner loop that calls the LLM
+    # multiple times per tick until it emits ``noop``. This value
+    # caps each individual call (each batch) rather than the whole
+    # tick. Kept at the legacy name for backward compatibility.
+    max_actions_per_tick: int = 6
+    # Soft wall-clock work budget per agent per tick, in seconds.
+    # Surfaced in the prompt as [TIME BUDGET] with a wind-down hint
+    # once usage passes 50% / 75% / 90% so the LLM can self-regulate
+    # (the user pointed out real workers don't keep acting forever —
+    # they feel the clock). Also acts as a hard ceiling: the inner
+    # loop terminates on exhaustion regardless of whether the agent
+    # emitted noop. Default 180s ≈ ~50 LLM calls at typical latency,
+    # which is enough for long chained work without unbounded mail
+    # storms. Lower this to compress tick wall time; raise to give
+    # slow models more headroom.
+    tick_budget_seconds: float = 180.0
 
 
 @dataclass
@@ -591,7 +608,8 @@ def load_enterprise_config(data: dict) -> EnterpriseConfig:
     ec.secret_placements = [_build_secret_placement(p)
                              for p in data.get("secret_placements", [])]
     for key in ("salary_per_day", "token_cost_per_1k", "tool_cost_per_call",
-                "ticks_per_day", "max_actions_per_tick"):
+                "ticks_per_day", "max_actions_per_tick",
+                "tick_budget_seconds"):
         if key in data:
             setattr(ec, key, data[key])
     return ec

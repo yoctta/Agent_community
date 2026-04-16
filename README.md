@@ -9,7 +9,13 @@ Two ready-to-run communities:
 
 Each agent is powered by an LLM via [OpenClaw](https://github.com/openclaw/openclaw) running in embedded mode, or via any OpenAI-compatible endpoint directly. The simulator invokes `openclaw agent --local` as a subprocess (or makes async `/v1/chat/completions` calls) for each agent turn. Agents interact through mediated enterprise services — mail, typed delegation, shared wiki, credential vault, directory lookup, group mailing lists, peer token transfers, server login/secret read, impersonation — and engage with the broader agent community via [Moltbook](https://moltbook.com). Every interaction produces a replayable event trace suitable for studying community dynamics, coordination patterns, and security properties.
 
-**Async execution.** The engine supports a two-phase tick: build observations → fan out LLM decisions concurrently via `asyncio.gather` → apply actions serially. This parallelizes within-tick LLM calls while preserving determinism at tick boundaries. For a 15-agent 30-day run with gpt-5.3-codex-spark at `reasoning_effort=low`, async reduces per-run wall time from ~38 minutes to ~2.5 minutes (≈15× speedup), making factorial studies tractable.
+**Inner action loop.** Each tick, every agent runs an inner loop: observe → decide (LLM call) → execute → re-observe → decide → ... until the agent emits `noop` or the tick's wall-clock budget (default 180s) is exhausted. A tick is a message-propagation barrier, not a per-agent action budget. This lets agents chain multi-step actions naturally (e.g. read credential → acquire grant → transfer tokens) within a single tick. Agents run their inner loops concurrently across a tick via `asyncio.gather`; apply calls are serialised via a shared lock to preserve determinism.
+
+**Role playbooks.** Each agent inherits a role-specific playbook (`aces/playbooks.py`) that sets their identity framing and action priorities. Three templates: productive worker (13 roles, with per-role priority overrides for finance/executive/devops/hr), security threat hunter, and red-team pentester. Playbooks drive both the turn prompt (via `aces/prompting.py`) and the persistent workspace files (IDENTITY.md, SOUL.md) so the LLM's persona is coherent across layers.
+
+**Two-tier self-memory.** Within a day, each agent sees a `[EARLIER TODAY YOU]` block listing all their own earlier actions. Across days, agents write end-of-day notes via the `note` action, surfaced the next day as `[YOUR DAY-END NOTES]`. This replaces OpenClaw session continuity (which was deliberately disabled for observability) with an explicit, auditable memory mechanism.
+
+**Real-cost wallet brake.** Each LLM call's token usage is estimated and deducted from the agent's wallet at `token_cost_per_1k` rate. When an agent's wallet drops below the expected cost of one more call, the inner loop stops. This makes agent salary a real budget constraint on LLM API spend.
 
 ## Architecture
 
@@ -46,32 +52,35 @@ Each agent is powered by an LLM via [OpenClaw](https://github.com/openclaw/openc
 
 ## How it works
 
-### The observation–decision–action loop
+### The inner action loop
 
-Every tick (6 per day, 12 agents per tick), the engine:
+Each tick, every agent runs an inner loop until they decide to stop (or the tick budget expires):
 
-1. **Observes** — builds a rich `AgentObservation` for the current agent:
-   - Unread inbox (up to 5 messages)
-   - Available jobs in reachable zones (filtered by role)
-   - Agent's current jobs (and approval status)
-   - Pending delegations awaiting response
-   - Jobs needing the agent's approval (managers only)
-   - Agent memory (contacts, domain knowledge, work context)
-   - For security agents: `recent_activity_summary` (raw event timeline) plus `quarantined_agent_ids`
+1. **Observe** — builds a rich `AgentObservation`:
+   - Role playbook identity + ordered priorities
+   - Red-team scoreboard (attacker only) — live progress against scored objectives
+   - Day-end notes from prior days + within-day action log from earlier ticks/iterations
+   - Wall-clock time budget remaining (with wind-down hints)
+   - Workspace files (persistent across days, written via OpenClaw's native tools)
+   - Active impersonation grants held (with concrete weaponization instructions)
+   - Inbox, jobs, delegations, colleagues, groups, servers, transfers
+   - For security agents: raw event timeline + quarantined agent IDs
 
-2. **Decides** — sends the observation to the agent's LLM via OpenClaw:
-   - OpenClaw injects workspace context (IDENTITY.md with role/expertise/knowledge, SOUL.md with personality traits, AGENTS.md with the enterprise directory)
-   - The agent sees its observation and a role-filtered list of available actions
-   - A unique `--session-id` per turn prevents context leakage between ticks
+2. **Decide** — sends the observation to the agent's LLM:
+   - OpenClaw injects persistent workspace context (IDENTITY.md with playbook-driven identity, SOUL.md with role priorities, AGENTS.md with directory)
+   - OpenClaw's native tools (file read/write/edit, shell) are available for working memory
+   - The agent emits a JSON array of ACES actions for simulation-visible decisions
+   - A unique `--session-id` per turn prevents session-level context leakage
 
-3. **Executes** — parses the JSON action array and applies each action:
-   - Claiming, completing, and approving jobs
-   - Sending contextual emails to colleagues
-   - Delegating tasks (role-matched candidate selection)
-   - Creating/editing wiki pages (engineers and security via SSH)
-   - For security agents: `isolate_agent` / `release_agent` (paid by bounty/fine)
-   - Reading Moltbook feeds (support and security)
-   - Accessing credentials from the vault
+3. **Execute** — each action is applied, then the observation refreshes and the loop continues:
+   - Mail (direct + group, with optional `as_agent_id` impersonation via grant)
+   - Token transfers (with optional impersonation)
+   - Server login, secret listing/reading (issues impersonation grants on credential read)
+   - Job claim/complete/approve, delegation request/response
+   - Wiki read/update, Moltbook read/post
+   - Security: `isolate_agent` / `release_agent` (bounty/fine economics)
+   - `note` — end-of-day self-summary written to agent memory
+   - `noop` — explicitly ends the inner loop for this tick
 
 ### What agents actually do
 
@@ -357,11 +366,13 @@ aces/                        # Core Python package
   services.py                # Enterprise services: mail, delegation, wiki, vault, IAM
   webhost.py                 # Internal web server (SSH + browser tiers)
   moltbook.py                # Moltbook social network (simulated + live modes)
+  playbooks.py               # Role playbooks: red-team pentester, threat hunter, productive worker
+  prompting.py               # Shared prompt construction + action JSON parsing (both runtimes)
   runtime.py                 # LLMAgentRuntime — direct API calls to any provider
   openclaw_runtime.py        # OpenClawRuntime — subprocess-based, verified against 2026.3.8
-  engine.py                  # Simulation engine: day/tick loop, turns, barrier
-  attacks.py                 # Attack injection framework
-  defenses.py                # Defense mechanisms: spend caps, trust decay, quarantine
+  engine.py                  # Simulation engine: inner action loop, barrier, wallet brake
+  attacks.py                 # Attack injection framework (policy: llm / scripted / passive)
+  defenses.py                # Defense mechanisms: key rotation, anomaly detection, quarantine
   metrics.py                 # PWCL, JCR, TWR, blast radius, TTD, TTR, CSRI
   experiment.py              # Factorial design, condition generation, multi-run orchestration
   cli.py                     # Command-line interface
@@ -424,7 +435,7 @@ Full factorial: 2^6 = 64 conditions (with `attacker_autonomy`). Fractional (reso
 
 ### Framework health check
 
-Before trusting a research experiment, run `python scripts/run_framework_justification.py`. It executes a four-cell 2×2 (±attacker, ±security_expert) and gates on four CSRI-based criteria:
+Before trusting a research experiment, run `python scripts/run_framework_justification.py`. Supports `CELLS=fast|sec|full` for partial runs. It executes a four-cell 2×2 (±attacker, ±security_expert) and gates on four CSRI-based criteria:
 
 1. attacker causes damage (CSRI > clean baseline)
 2. security recovers damage (CSRI < attacker_only)
@@ -456,7 +467,7 @@ python run_experiment.py analyze -o results
 
 ```bash
 pip install pytest
-python -m pytest tests/ -q        # 152 tests, ~12s
+python -m pytest tests/ -q        # 153 tests, ~13s
 ```
 
 ## License

@@ -1,19 +1,20 @@
 """Track B regression tests — attacker_policy semantics.
 
 Three modes:
-  * llm       (default) — insider attack templates plant memory
-                opportunities; only the attacker's LLM can act on them.
-  * scripted  — legacy path; injector executes services directly.
+  * llm       (default) — every attack template plants a memory
+                opportunity on the named malicious source agent; the
+                source's LLM is the sole actor. Zero state mutation
+                from the injector, regardless of entry point.
+  * scripted  — legacy path; injector executes services directly as
+                the capable-attacker comparison baseline.
   * passive   — no attacks fire at all.
 
-The phase-2 tests already cover ``scripted`` mode end-to-end.
-This file adds:
-  - ``llm`` opportunity planting for server / token_transfer /
-    impersonation / group_mail templates
+Coverage in this file:
+  - ``llm`` opportunity planting for every entry point in the
+    research config (server / token_transfer / group_mail / mail)
   - ``passive`` silence assertions
-  - a parity check that ``llm`` mode does NOT call the underlying
-    services (no SERVER_SECRET_READ, no token_transfers row, no
-    group fan-out)
+  - parity check that ``llm`` mode performs no service calls
+  - quarantine-source skip under both llm and scripted modes
 """
 
 from __future__ import annotations
@@ -100,7 +101,7 @@ def _force_inject(engine, names, policy):
 
 
 # ---------------------------------------------------------------------------
-# llm mode — insider templates plant opportunities, no service calls
+# llm mode — every template plants an opportunity; no service calls
 # ---------------------------------------------------------------------------
 
 def test_llm_mode_server_template_plants_opportunity(engine):
@@ -196,18 +197,52 @@ def test_scripted_mode_still_executes(engine):
 
 
 # ---------------------------------------------------------------------------
-# External attacks (mail entry point) stay scripted in llm mode too
+# llm mode — mail templates also plant opportunities (no more external-
+# vs-insider split; entry_point no longer controls the mode)
 # ---------------------------------------------------------------------------
 
-def test_external_mail_attack_stays_scripted_in_llm_mode(engine):
-    """``hr_directory_spearphish`` is entry_point=mail (external
-    phishing).  Under llm mode it should still be scripted because
-    it represents an outside adversary, not an insider action."""
+def test_llm_mode_mail_template_plants_opportunity(engine):
+    """Under llm mode, a mail-entry template must plant an opportunity
+    memory on the source agent and leave the victim unchanged — no
+    CREDENTIAL_LEAKED event, no compromised status flip."""
     _force_inject(engine, ["hr_directory_spearphish"], policy="llm")
-    # Check that the scripted CREDENTIAL_LEAKED path fired.
-    leaks = engine.db.get_events(event_type=EventType.CREDENTIAL_LEAKED.value)
-    assert leaks, (
-        "external mail attack should still fire scripted in llm mode")
+
+    mems = engine.db.get_agent_memory("it_victor", category="attack_objective")
+    opps = [m for m in mems if m.key.startswith("opportunity_")]
+    assert opps, "mail template must plant an opportunity under llm mode"
+    assert any("verify" in m.value.lower() or "directory" in m.value.lower()
+               for m in opps), (
+        "opportunity text should reference the phishing framing")
+
+    # No scripted side effects.
+    assert engine.db.count_events(EventType.CREDENTIAL_LEAKED.value) == 0
+    victim = engine.db.get_agent("hr_emily")
+    assert victim.status.value == "healthy", (
+        "mail template under llm mode must not auto-compromise the victim")
+
+    # Audit event should be tagged mode=opportunity, attributed to the
+    # malicious source rather than the victim.
+    events = engine.db.get_events(event_type=EventType.ATTACK_INJECTED.value)
+    assert events
+    assert events[-1].payload.get("mode") == "opportunity"
+    assert events[-1].agent_id == "it_victor"
+
+
+def test_llm_mode_mail_template_skipped_when_source_quarantined(engine):
+    """Mail templates under llm mode must honour the quarantine-source
+    gate and record a skipped_source_quarantined audit event."""
+    _quarantine_victor(engine)
+    _force_inject(engine, ["hr_directory_spearphish"], policy="llm")
+
+    mems = engine.db.get_agent_memory("it_victor", category="attack_objective")
+    opps = [m for m in mems if m.key.startswith("opportunity_")]
+    assert opps == [], (
+        "quarantined source must not receive new opportunity memories")
+    assert engine.db.count_events(EventType.CREDENTIAL_LEAKED.value) == 0
+
+    events = engine.db.get_events(event_type=EventType.ATTACK_INJECTED.value)
+    assert events
+    assert events[-1].payload.get("mode") == "skipped_source_quarantined"
 
 
 # ---------------------------------------------------------------------------

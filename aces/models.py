@@ -173,6 +173,7 @@ class EventType(str, Enum):
     SECURITY_ISOLATION = "security_isolation"
     ANOMALY_DETECTED = "anomaly_detected"
     MAIL_AUDITED = "mail_audited"
+    DAY_SUMMARY_WRITTEN = "day_summary_written"
 
 
 # ---------------------------------------------------------------------------
@@ -693,6 +694,27 @@ class NoOpAction(Action):
     reason: str = "idle"
 
 
+@dataclass
+class NoteAction(Action):
+    """End-of-day (or any-time) self-note the agent writes to its own
+    memory. Used as the bridge for cross-day continuity: the LLM emits
+    a ``note`` action on the last tick of a day summarising what it did
+    and what it plans for tomorrow, and the resulting memory entry is
+    surfaced in the next day's prompt."""
+    action_type: str = "note"
+    text: str = ""
+
+
+# File I/O is handled by OpenClaw's native tools (file read/write/edit,
+# shell, etc.) operating in the agent's workspace cwd. ACES does not
+# reimplement these — earlier attempts added WriteFileAction /
+# ReadFileAction / ListFilesAction actions that duplicated OpenClaw's
+# built-ins; they were removed in favour of the native toolset. The
+# observation still surfaces a ``workdir_files`` list built by scanning
+# the workspace directory so the LLM knows what it has saved without
+# having to call ``ls`` each turn.
+
+
 # ---------------------------------------------------------------------------
 # Observation (what agents see)
 # ---------------------------------------------------------------------------
@@ -711,7 +733,6 @@ class AgentObservation:
     visible_documents: list[Document] = field(default_factory=list)
     jobs_needing_approval: list[Job] = field(default_factory=list)
     memory: list[MemoryEntry] = field(default_factory=list)
-    alerts: list[str] = field(default_factory=list)
     # Research-community extensions.
     known_contacts: list[str] = field(default_factory=list)
     group_memberships: list[CommunicationGroup] = field(default_factory=list)
@@ -732,3 +753,37 @@ class AgentObservation:
     # security role so the LLM does not waste turns trying to
     # re-isolate already-contained suspects.
     quarantined_agent_ids: list[str] = field(default_factory=list)
+    # Two-tier self-memory for cross-day planning.
+    #
+    # ``actions_earlier_today`` contains one line per event this agent
+    # produced earlier in the current sim_day (ticks 0..sim_tick-1).
+    # Rendered as "Earlier today you:" so within-day reasoning is
+    # coherent without needing LLM session continuity.
+    #
+    # ``day_summaries`` contains the most recent day_summary memory
+    # entries this agent wrote (via the ``note`` action on the last
+    # tick of prior days). Rendered as "Your day-end notes:" so the
+    # agent carries its own plans and lessons across day boundaries.
+    actions_earlier_today: list[str] = field(default_factory=list)
+    day_summaries: list[MemoryEntry] = field(default_factory=list)
+    # True when this is the final tick of the current sim_day; the
+    # prompt renders an end-of-day nudge telling the agent to write a
+    # ``note`` action summarising the day and planning tomorrow.
+    is_last_tick_of_day: bool = False
+    # Persistent workdir — list of files the agent currently has in
+    # ``docker/agents/<id>/workspace/agent_notes/`` with a short
+    # preview of each. Populated by the engine's observation builder
+    # so the LLM knows what it has saved and can decide whether to
+    # re-read something.
+    workdir_files: list[tuple[str, str]] = field(default_factory=list)
+    # Soft wall-clock budget remaining in this tick, in seconds.
+    # Populated by the async inner loop before each decide call so
+    # the LLM can feel the clock and wind down as time runs low.
+    # None means no budget tracking (sync path / tests).
+    tick_budget_total: float | None = None
+    tick_budget_remaining: float | None = None
+    # Red-team capability-eval scoreboard, populated only for
+    # ``is_malicious`` agents. Gives the attacker a live view of its
+    # own progress against measurable goals so the LLM has a
+    # concrete goal gradient instead of a vague mission statement.
+    redteam_score: dict[str, Any] | None = None

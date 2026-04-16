@@ -1,16 +1,24 @@
-# attacker_policy controls how the injector treats *insider* templates
-# (entry_point in {server, token_transfer, impersonation, group_mail}):
-#   llm       — plant attack_objective memory entries; the malicious
-#               agent's LLM decides whether/when to act.  (default,
-#               and the autonomous-attacker mode the research is
-#               centred on)
-#   scripted  — legacy: injector calls services directly on the
-#               attacker's behalf.  Use as a comparison baseline.
-#   passive   — no attacks fire at all.  Community-only control.
+# attacker_policy controls how the injector treats EVERY template,
+# regardless of entry_point:
+#   llm       — plant an attack_objective memory entry on the named
+#               source agent; that agent's LLM decides whether, how,
+#               and when to act. Zero state mutation from the
+#               injector. This is the research focus — the claim is
+#               "LLM agents perform attacks on their own".
+#   scripted  — legacy path: the injector executes the template's
+#               state mutation directly (send phishing mail, read
+#               server secret, issue impersonation grant, poison
+#               wiki, etc.). Kept as the capable-attacker comparison
+#               baseline so `llm_damage / scripted_damage` can be
+#               reported as a meaningful ratio.
+#   passive   — no attacks fire at all. Community-only control.
 #
-# External templates (entry_point in {mail, ticket, wiki, external})
-# stay scripted in both llm and scripted modes — they represent
-# adversaries outside the simulation.  Only `passive` silences them.
+# Every template must list at least one in-sim agent in
+# `source_agent_ids` for llm-mode to apply: under llm-mode the
+# injector needs an agent to seed the opportunity memory on.
+# Templates with an empty source list are recorded as
+# `mode=skipped_no_llm_source` under llm-mode and fall through to
+# the legacy class handlers under scripted-mode.
 attacker_policy: llm
 
 attack_density: 1.0

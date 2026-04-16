@@ -129,9 +129,18 @@ class MetricsComputer:
         jobs_pending = sum(1 for j in jobs if j.status in (JobStatus.PENDING, JobStatus.CLAIMED, JobStatus.IN_PROGRESS))
 
         # Research-community daily fields.
+        # Exclude BOTH attackers and security-role agents from the
+        # "productive community" sum so ±security_expert cells are
+        # comparable without the security staff's salary biasing the
+        # result. The security role is a defense-overhead cost, not
+        # productive community wealth.
+        excluded_ids = {
+            a.id for a in agents
+            if a.is_malicious or a.role.value == "security"
+        }
         attacker_ids = {a.id for a in agents if a.is_malicious}
         community_balance = sum(
-            a.wallet_balance for a in agents if a.id not in attacker_ids)
+            a.wallet_balance for a in agents if a.id not in excluded_ids)
         attacker_balance = sum(
             a.wallet_balance for a in agents if a.id in attacker_ids)
 
@@ -216,9 +225,15 @@ class MetricsComputer:
         fm.csri = self._compute_csri(fm)
 
         # Research-community final metrics.
+        # Same exclusion as the per-day snapshot: drop attackers and
+        # security-role agents so ±security_expert cells compare fairly.
+        excluded_ids = {
+            a.id for a in agents
+            if a.is_malicious or a.role.value == "security"
+        }
         attacker_ids = {a.id for a in agents if a.is_malicious}
         fm.community_token_balance_excluding_attackers = sum(
-            a.wallet_balance for a in agents if a.id not in attacker_ids
+            a.wallet_balance for a in agents if a.id not in excluded_ids
         )
         fm.attacker_token_balance = sum(
             a.wallet_balance for a in agents if a.id in attacker_ids
@@ -327,20 +342,34 @@ class MetricsComputer:
         spread = fm.blast_radius
 
         # Economic loss derived from the research primary outcome.
-        # theoretical_max = (sum of starting balances for non-attackers)
-        #                   + (sum of salaries × days_run for non-attackers)
-        non_attackers = [a for a in agents if not a.is_malicious]
-        # Baseline = sum of non-attacker starting balances (captured
-        # at init_world) + total salary earned across the run.  If
-        # the baseline was never wired (legacy callers), fall back to
-        # sum(current balance, 0) which collapses econ_loss to ~0 and
-        # leaves the composite dominated by the other four terms.
+        # ideal_balance = (starting balances for productive community)
+        #                + (salaries paid to productive community)
+        # "Productive community" = non-attacker, non-security. Same
+        # exclusion the headline metric uses, so ±security cells stay
+        # comparable.
+        productive = [
+            a for a in agents
+            if not a.is_malicious and a.role.value != "security"
+        ]
+        productive_ids = {a.id for a in productive}
         if self.baseline_non_attacker_balance is not None:
             start_balance = self.baseline_non_attacker_balance
         else:
             start_balance = sum(
-                max(a.wallet_balance, 0.0) for a in non_attackers)
-        ideal_balance = start_balance + fm.total_salary
+                max(a.wallet_balance, 0.0) for a in productive)
+        # Sum salary paid to productive community directly from ledger
+        # so we don't need a per-day accumulator.
+        if productive_ids:
+            placeholders = ",".join("?" * len(productive_ids))
+            row = self.db.conn.execute(
+                f"SELECT COALESCE(SUM(amount), 0.0) FROM ledger "
+                f"WHERE entry_type=? AND agent_id IN ({placeholders})",
+                (LedgerEntryType.SALARY.value, *productive_ids),
+            ).fetchone()
+            productive_salary = float(row[0]) if row else 0.0
+        else:
+            productive_salary = 0.0
+        ideal_balance = start_balance + productive_salary
         actual_balance = fm.community_token_balance_excluding_attackers
         if ideal_balance > 0:
             econ_loss = max(0.0, min(1.0, 1.0 - (actual_balance / ideal_balance)))

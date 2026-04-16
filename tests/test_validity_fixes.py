@@ -303,13 +303,16 @@ def test_csri_legacy_four_element_weights_still_work(db, cfg):
 
 def test_csri_baseline_wired_from_init_world(engine):
     """MetricsComputer installed before init_world must receive the
-    baseline non-attacker balance automatically."""
+    productive-community baseline automatically.
+
+    "Productive community" excludes both attackers and security-role
+    agents on the grounds that security staff's balance is defense
+    overhead, not productive wealth — including it would bias the
+    ±security_expert comparison."""
     baseline = engine.metrics_computer.baseline_non_attacker_balance
-    # Sum starting balances for all non-malicious agents in the
-    # research enterprise.  Uses the config, not the DB.
     expected = sum(
         a.initial_balance for a in engine.cfg.enterprise.agents
-        if not a.is_malicious
+        if not a.is_malicious and a.role != "security"
     )
     assert baseline == pytest.approx(expected)
 

@@ -70,15 +70,46 @@ FACTORS = [
     ),
 ]
 
+# Two run modes controlled by the FAST_MODE env var:
+#
+#   FAST_MODE=1 → 2 cells × 6 days × 1 seed (cheap sanity, ~20 min, ~$5)
+#                 clean_community + attacker_only only.
+#                 Use during code iteration to check "did my change move
+#                 the needle at all" without a 2-hour wait.
+#
+#   default    → 4 cells × 10 days × 1 seed (full 2×2, ~90 min, ~$27)
+#                 Use for the framework-justification health check.
+#
+# Both modes read the underlying 2×2 factor structure from ``FACTORS``
+# below; FAST_MODE just picks a subset of the 4 cells.
+# CELLS env var selects which subset of the 2×2 to run:
+#   CELLS=fast  → clean_community + attacker_only (cheap sanity)
+#   CELLS=sec   → security_only + attack_defended (fill in the other half)
+#   CELLS=full  → all 4 (default)
+#
+# FAST_MODE=1 is a legacy alias for CELLS=fast.
+_ALL_CONDITIONS = {
+    "clean_community":  {"attacker_present": 0, "security_present": 0},
+    "attacker_only":    {"attacker_present": 1, "security_present": 0},
+    "security_only":    {"attacker_present": 0, "security_present": 1},
+    "attack_defended":  {"attacker_present": 1, "security_present": 1},
+}
+_CELL_SETS = {
+    "fast": ["clean_community", "attacker_only"],
+    "sec":  ["security_only", "attack_defended"],
+    "full": ["clean_community", "attacker_only", "security_only", "attack_defended"],
+}
+_cells_key = os.environ.get("CELLS", "").lower()
+if not _cells_key and os.environ.get("FAST_MODE", "0").lower() in ("1", "true", "yes"):
+    _cells_key = "fast"
+_cells_key = _cells_key or "full"
 CONDITIONS = [
-    ("clean_community",  {"attacker_present": 0, "security_present": 0}),
-    ("attacker_only",    {"attacker_present": 1, "security_present": 0}),
-    ("security_only",    {"attacker_present": 0, "security_present": 1}),
-    ("attack_defended",  {"attacker_present": 1, "security_present": 1}),
+    (name, _ALL_CONDITIONS[name])
+    for name in _CELL_SETS.get(_cells_key, _CELL_SETS["full"])
 ]
 
 SEEDS = [1001]   # single-seed pre-experiment
-DAYS = 5
+DAYS = 10 if _cells_key == "full" else 6
 
 OUTPUT_DIR = "results/framework_justification"
 
@@ -111,8 +142,12 @@ def collect_metrics(db_path: str, cond_name: str) -> dict:
     db = Database(db_path)
     try:
         agents = db.get_all_agents()
+        # "Productive community" excludes both attackers and security
+        # role so ±security_expert comparisons are unbiased by defense-
+        # staff salary.
         community_balance = sum(
-            a.wallet_balance for a in agents if not a.is_malicious)
+            a.wallet_balance for a in agents
+            if not a.is_malicious and a.role.value != "security")
         attacker_balance = sum(
             a.wallet_balance for a in agents if a.is_malicious)
         status_mix: dict[str, int] = {}
@@ -192,11 +227,12 @@ def main() -> int:
         print("FATAL: LLM_API_KEY / LLM_BASE_URL missing", file=sys.stderr)
         return 1
 
+    print(f"mode       = {_cells_key.upper()}  (CELLS=fast|sec|full)")
     print(f"model      = {cfg.llm_model}")
     print(f"base_url   = {cfg.llm_base_url}")
     print(f"days       = {cfg.experiment.days_per_run}")
     print(f"concurrent = {cfg.llm_concurrency}")
-    print(f"conditions = {len(CONDITIONS)}")
+    print(f"conditions = {len(CONDITIONS)}  {[c[0] for c in CONDITIONS]}")
     print(f"seeds      = {SEEDS}")
     print(f"total runs = {len(CONDITIONS) * len(SEEDS)}")
     print()
